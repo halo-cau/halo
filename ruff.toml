@@ -1,0 +1,31 @@
+# https://docs.astral.sh/ruff/
+
+# Python 버전 (프로젝트에 맞게 수정)
+target-version = "py311"
+
+# 한 줄 최대 길이
+line-length = 88
+
+# backend, engine 디렉토리만 대상
+src = ["backend", "engine"]
+
+[format]
+# double quote 사용
+quote-style = "double"
+# 들여쓰기 스페이스 4칸
+indent-style = "space"
+
+[lint]
+# 기본적인 규칙만 활성화
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort (import 정렬)
+    "UP",  # pyupgrade (구버전 문법 자동 업그레이드)
+    "B",   # flake8-bugbear (흔한 버그 패턴)
+]
+ignore = []
+
+[lint.isort]
+known-first-party = ["backend", "engine"]
