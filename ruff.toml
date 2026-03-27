@@ -25,7 +25,9 @@ select = [
     "UP",  # pyupgrade (구버전 문법 자동 업그레이드)
     "B",   # flake8-bugbear (흔한 버그 패턴)
 ]
-ignore = []
+ignore = [
+    "B008",  # FastAPI uses File(...)/Form(...) in function defaults by design
+]
 
 [lint.isort]
 known-first-party = ["backend", "engine"]
