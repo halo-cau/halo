@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>HALO — Scan Viewer</title>
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      body {
+        font-family: "Pretendard", -apple-system, BlinkMacSystemFont, sans-serif;
+        background: #0a0e17; color: #e0e0e0; height: 100vh; overflow: hidden;
+      }
+
+      .header {
+        display: flex; align-items: center; justify-content: space-between;
+        padding: 12px 24px; background: #0d1220; border-bottom: 1px solid #1a2744;
+      }
+      .header h1 { font-size: 18px; font-weight: 700; color: #fff; }
+      .header h1 span { color: #00bcd4; }
+
+      .layout {
+        display: grid; grid-template-columns: 320px 1fr;
+        height: calc(100vh - 50px);
+      }
+
+      /* --- Left Panel --- */
+      .panel {
+        background: #0d1220; border-right: 1px solid #1a2744;
+        padding: 20px; overflow-y: auto;
+      }
+      .panel h2 { font-size: 14px; color: #00bcd4; margin-bottom: 12px; text-transform: uppercase; letter-spacing: 1px; }
+      .panel label { display: block; font-size: 13px; color: #99aabb; margin-bottom: 6px; }
+      .panel input[type="file"],
+      .panel textarea {
+        width: 100%; padding: 8px 10px; border: 1px solid #1a2744; border-radius: 6px;
+        background: #111827; color: #e0e0e0; font-size: 13px; font-family: inherit;
+        margin-bottom: 16px;
+      }
+      .panel textarea { height: 120px; resize: vertical; }
+
+      .btn {
+        width: 100%; padding: 10px; border: none; border-radius: 6px;
+        font-size: 14px; font-weight: 600; cursor: pointer; transition: background 0.2s;
+      }
+      .btn-primary { background: #00bcd4; color: #000; }
+      .btn-primary:hover { background: #00d4ef; }
+      .btn-primary:disabled { background: #1a2744; color: #556; cursor: not-allowed; }
+
+      .stage-btns { display: flex; gap: 8px; margin-top: 20px; }
+      .stage-btn {
+        flex: 1; padding: 8px 4px; border: 1px solid #1a2744; border-radius: 6px;
+        background: #111827; color: #99aabb; font-size: 12px; cursor: pointer;
+        text-align: center; transition: all 0.2s;
+      }
+      .stage-btn.active { border-color: #00bcd4; color: #00bcd4; background: #0d1a2a; }
+      .stage-btn:hover { border-color: #00bcd4; }
+
+      .status { margin-top: 16px; font-size: 12px; color: #667; min-height: 20px; }
+      .status.error { color: #f44; }
+      .status.success { color: #4c8; }
+
+      .legend { margin-top: 24px; }
+      .legend h3 { font-size: 12px; color: #667; margin-bottom: 8px; }
+      .legend-item { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; font-size: 12px; }
+      .legend-dot { width: 12px; height: 12px; border-radius: 3px; }
+
+      /* --- 3D Canvas --- */
+      #viewer { width: 100%; height: 100%; display: block; }
+    </style>
+  </head>
+  <body>
+    <div class="header">
+      <h1>HALO <span>Scan Viewer</span></h1>
+    </div>
+
+    <div class="layout">
+      <div class="panel">
+        <h2>Upload Scan</h2>
+
+        <label for="obj-file">.obj Mesh File</label>
+        <input type="file" id="obj-file" accept=".obj" />
+
+        <label for="metadata">Metadata (JSON)</label>
+        <textarea id="metadata" placeholder='{
+  "ac_vents": [{"x": 1, "y": 1, "z": 2.5}],
+  "legacy_servers": [{"x": 3, "y": 2, "z": 0.5}],
+  "human_workspaces": [{"x": 5, "y": 3, "z": 0}]
+}'></textarea>
+
+        <button class="btn btn-primary" id="upload-btn">Process Scan</button>
+        <div class="status" id="status"></div>
+
+        <div class="stage-btns" id="stage-btns" style="display:none;">
+          <button class="stage-btn active" data-stage="raw">Raw</button>
+          <button class="stage-btn" data-stage="cleaned">Cleaned</button>
+          <button class="stage-btn" data-stage="semantic">Semantic</button>
+        </div>
+
+        <div class="legend" id="legend" style="display:none;">
+          <h3>Semantic Colors</h3>
+          <div class="legend-item"><div class="legend-dot" style="background:#b4b4b4"></div> Wall / Obstacle</div>
+          <div class="legend-item"><div class="legend-dot" style="background:#e63c3c"></div> Legacy Server (heat)</div>
+          <div class="legend-item"><div class="legend-dot" style="background:#3c8ce6"></div> AC Vent (cooling)</div>
+          <div class="legend-item"><div class="legend-dot" style="background:#3cc864"></div> Human Workspace</div>
+        </div>
+      </div>
+
+      <canvas id="viewer"></canvas>
+    </div>
+
+    <script type="module" src="./src/scan.ts"></script>
+  </body>
+</html>
