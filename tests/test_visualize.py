@@ -9,7 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
-from engine.core.data_types import Coordinate, ScanMetadata
+from engine.core.data_types import Coordinate, CoolingUnit, ScanMetadata
 from engine.vision.cleaner import clean_and_align_meshes
 from engine.vision.exporter import o3d_to_glb, paint_semantic_colors
 
@@ -57,7 +57,7 @@ class TestPaintSemanticColors:
     def test_colors_vertices(self, sample_obj_path: Path) -> None:
         _, cleaned = clean_and_align_meshes(sample_obj_path)
         meta = ScanMetadata(
-            ac_vents=[Coordinate(1.0, 1.0, 0.5)],
+            cooling_units=[CoolingUnit(Coordinate(1.0, 1.0, 0.5))],
         )
         colored = paint_semantic_colors(cleaned, meta)
         assert colored.has_vertex_colors()
@@ -94,7 +94,7 @@ class TestVisualizeEndpoint:
     ) -> None:
         meta = json.dumps(
             {
-                "ac_vents": [{"x": 1.0, "y": 1.0, "z": 1.0}],
+                "cooling_units": [{"position": {"x": 1.0, "y": 1.0, "z": 1.0}}],
                 "legacy_servers": [{"x": 1.5, "y": 1.0, "z": 0.5}],
                 "human_workspaces": [{"x": 2.0, "y": 1.5, "z": 0.1}],
             }

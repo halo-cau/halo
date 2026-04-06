@@ -52,7 +52,8 @@ async def process_scan(
         obj_path.write_bytes(contents)
 
         # --- Run CV pipeline (engine layer) ---
-        grid: np.ndarray = run_pipeline(obj_path, engine_metadata)
+        result = run_pipeline(obj_path, engine_metadata)
+        grid = result.grid
     except EngineError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
