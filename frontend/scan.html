@@ -64,6 +64,35 @@
       .legend-item { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; font-size: 12px; }
       .legend-dot { width: 12px; height: 12px; border-radius: 3px; }
 
+      /* --- Metrics Panel --- */
+      .metrics-panel {
+        margin-top: 20px; padding: 12px; background: #111827;
+        border: 1px solid #1a2744; border-radius: 8px; font-size: 12px;
+      }
+      .metrics-panel h3 {
+        font-size: 12px; color: #00bcd4; margin-bottom: 8px;
+        text-transform: uppercase; letter-spacing: 0.5px;
+      }
+      .metric-row {
+        display: flex; justify-content: space-between; padding: 3px 0;
+        border-bottom: 1px solid #1a274422;
+      }
+      .metric-label { color: #99aabb; }
+      .metric-value { font-weight: 600; color: #e0e0e0; }
+      .metric-value.good { color: #2ecc71; }
+      .metric-value.warn { color: #f39c12; }
+      .metric-value.bad { color: #e74c3c; }
+      .rack-card {
+        margin: 6px 0; padding: 8px 10px; border-radius: 6px;
+        border-left: 3px solid #555;
+      }
+      .rack-card.good { border-left-color: #2ecc71; background: #0d1a1a; }
+      .rack-card.warn { border-left-color: #f39c12; background: #1a1a0d; }
+      .rack-card.bad  { border-left-color: #e74c3c; background: #1a0d0d; }
+      .rack-header { font-weight: 600; color: #e0e0e0; margin-bottom: 4px; }
+      .rack-status { float: right; }
+      .rack-detail { color: #99aabb; font-size: 11px; }
+
       /* --- 3D Canvas --- */
       #viewer { width: 100%; height: 100%; display: block; }
     </style>
@@ -82,7 +111,7 @@
 
         <label for="metadata">Metadata (JSON)</label>
         <textarea id="metadata" placeholder='{
-  "ac_vents": [{"x": 1, "y": 1, "z": 2.5}],
+  "cooling_units": [{"position": {"x": 1, "y": 1, "z": 2.5}, "capacity_kw": 10, "supply_direction": [0, 0, -1]}],
   "legacy_servers": [{"x": 3, "y": 2, "z": 0.5}],
   "human_workspaces": [{"x": 5, "y": 3, "z": 0}]
 }'></textarea>
@@ -94,6 +123,9 @@
           <button class="stage-btn active" data-stage="raw">Raw</button>
           <button class="stage-btn" data-stage="cleaned">Cleaned</button>
           <button class="stage-btn" data-stage="semantic">Semantic</button>
+          <button class="stage-btn" data-stage="voxel">Voxel Grid</button>
+          <button class="stage-btn" data-stage="thermal">Thermal</button>
+          <button class="stage-btn" data-stage="ashrae">ASHRAE</button>
         </div>
 
         <div class="legend" id="legend" style="display:none;">
@@ -102,6 +134,15 @@
           <div class="legend-item"><div class="legend-dot" style="background:#e63c3c"></div> Legacy Server (heat)</div>
           <div class="legend-item"><div class="legend-dot" style="background:#3c8ce6"></div> AC Vent (cooling)</div>
           <div class="legend-item"><div class="legend-dot" style="background:#3cc864"></div> Human Workspace</div>
+          <div class="legend-item"><div class="legend-dot" style="background:#555555"></div> Rack Body</div>
+          <div class="legend-item"><div class="legend-dot" style="background:#00bcd4"></div> Rack Intake</div>
+          <div class="legend-item"><div class="legend-dot" style="background:#ff9800"></div> Rack Exhaust</div>
+        </div>
+
+        <div class="metrics-panel" id="metrics-panel" style="display:none;"></div>
+
+        <div id="demo-section" style="margin-top: 24px; border-top: 1px solid #1a2744; padding-top: 16px;">
+          <button class="btn btn-primary" id="demo-btn" style="background: #1a2744; color: #00bcd4;">Load Demo Room</button>
         </div>
       </div>
 
