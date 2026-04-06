@@ -6,10 +6,11 @@ import numpy as np
 import pytest
 
 from engine.core.config import (
+    GRID_SHAPE,
     OBSTACLE_WALL,
     SPACE_EMPTY,
 )
-from engine.core.data_types import Coordinate, ScanMetadata
+from engine.core.data_types import Coordinate, CoolingUnit, PipelineResult, ScanMetadata
 from engine.core.exceptions import MeshProcessingError
 from engine.vision.pipeline import run_pipeline
 
@@ -18,26 +19,31 @@ class TestRunPipeline:
     """End-to-end tests for the CV pipeline orchestrator."""
 
     def test_produces_valid_grid(self, sample_obj_path: Path) -> None:
-        """Pipeline should return a 3D int8 grid with expected labels."""
+        """Pipeline should return a PipelineResult with valid grids."""
         meta = ScanMetadata(
-            ac_vents=[Coordinate(1.0, 1.0, 1.0)],
+            cooling_units=[CoolingUnit(Coordinate(1.0, 1.0, 1.0))],
             legacy_servers=[Coordinate(1.5, 1.0, 0.5)],
             human_workspaces=[Coordinate(2.0, 1.5, 0.1)],
         )
-        grid = run_pipeline(sample_obj_path, meta)
+        result = run_pipeline(sample_obj_path, meta)
 
-        assert isinstance(grid, np.ndarray)
-        assert grid.dtype == np.int8
-        assert grid.ndim == 3
-        assert SPACE_EMPTY in np.unique(grid)
-        assert OBSTACLE_WALL in np.unique(grid)
+        assert isinstance(result, PipelineResult)
+        assert isinstance(result.grid, np.ndarray)
+        assert result.grid.dtype == np.int8
+        assert result.grid.ndim == 3
+        assert SPACE_EMPTY in np.unique(result.grid)
+        assert OBSTACLE_WALL in np.unique(result.grid)
+
+        # Padded grid has fixed shape
+        assert result.padded_grid.shape == GRID_SHAPE
+        assert result.padded_grid.dtype == np.int8
 
     def test_empty_metadata_ok(self, sample_obj_path: Path) -> None:
         """Pipeline should work with no semantic annotations."""
-        grid = run_pipeline(sample_obj_path, ScanMetadata())
+        result = run_pipeline(sample_obj_path, ScanMetadata())
 
-        assert grid.dtype == np.int8
-        unique = set(np.unique(grid))
+        assert result.grid.dtype == np.int8
+        unique = set(np.unique(result.grid))
         # Only empty and wall when no metadata
         assert unique <= {SPACE_EMPTY, OBSTACLE_WALL}
 

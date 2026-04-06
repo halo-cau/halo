@@ -60,8 +60,8 @@ def paint_semantic_colors(
     # Build a quick spatial lookup from metadata coordinates
     # Map each semantic point to a world coordinate + label
     semantic_points: list[tuple[np.ndarray, int]] = []
-    for vent in metadata.ac_vents:
-        semantic_points.append((np.array([vent.x, vent.y, vent.z]), COOLING_AC_VENT))
+    for unit in metadata.cooling_units:
+        semantic_points.append((np.array([unit.position.x, unit.position.y, unit.position.z]), COOLING_AC_VENT))
     for ws in metadata.human_workspaces:
         semantic_points.append((np.array([ws.x, ws.y, ws.z]), HUMAN_WORKSPACE))
     for srv in metadata.legacy_servers:
