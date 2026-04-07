@@ -144,8 +144,8 @@
       }
 
       .viewport canvas {
-        width: 100% !important;
-        height: 100% !important;
+        width: 100%;
+        height: 100%;
         display: block;
       }
 
@@ -415,8 +415,8 @@
       }
 
       .chart-wrapper canvas {
-        width: 100% !important;
-        height: 100% !important;
+        width: 100%;
+        height: 100%;
         border-radius: 8px;
       }
 
@@ -432,7 +432,7 @@
         border-bottom: 1px solid #1a2744;
       }
 
-      .rel-legend span {
+      .rel-legend > span {
         display: flex;
         align-items: center;
         gap: 4px;
@@ -634,6 +634,38 @@
         border-radius: 3px;
         transition: width 0.3s ease, background-color 0.3s;
       }
+
+      .airflow-legend {
+        position: absolute;
+        top: 16px;
+        left: 16px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        background: rgba(0, 0, 0, 0.75);
+        backdrop-filter: blur(8px);
+        padding: 10px 14px;
+        border-radius: 8px;
+        border: 1px solid #1a2744;
+        z-index: 10;
+        font-size: 11px;
+        color: #ccc;
+      }
+
+      .af-legend-item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .af-legend-box {
+        width: 14px;
+        height: 14px;
+        border-radius: 3px;
+        border: 1px solid;
+        flex-shrink: 0;
+      }
+
     </style>
   </head>
   <body>
@@ -662,8 +694,8 @@
         </div>
 
         <div class="steps-nav">
-          <button id="btn-prev">&larr; Prev</button>
-          <button id="btn-next">Next &rarr;</button>
+          <button type="button" id="btn-prev">&larr; Prev</button>
+          <button type="button" id="btn-next">Next &rarr;</button>
         </div>
       </div>
 
@@ -706,15 +738,33 @@
           </div>
         </div>
 
+        <!-- Airflow Zone Legend -->
+        <div class="airflow-legend" id="airflow-legend" style="display:none;">
+          <span class="af-legend-item">
+            <span class="af-legend-box" style="background:rgba(68,170,255,0.35);border-color:#44aaff;"></span>
+            Cold Air Zone
+          </span>
+          <span class="af-legend-item">
+            <span class="af-legend-box" style="background:rgba(255,221,68,0.35);border-color:#ffdd44;"></span>
+            Hot Air Zone
+          </span>
+          <span class="af-legend-item">
+            <span class="af-legend-box" style="background:rgba(255,23,68,0.35);border-color:#ff1744;"></span>
+            Recirculation
+          </span>
+        </div>
+
         <div class="viewport-controls" style="bottom: 60px;">
-          <button id="btn-heatmap">Heatmap</button>
-          <button id="btn-relations" data-showing="true">Hide Relations</button>
+          <button type="button" id="btn-heatmap">Heatmap</button>
+          <button type="button" id="btn-airflow">Airflow</button>
+          <button type="button" id="btn-zones">Zones</button>
+          <button type="button" id="btn-relations" data-showing="true">Hide Relations</button>
         </div>
 
         <!-- Simulation Timeline -->
         <div class="sim-bar">
           <span class="sim-label">SIM</span>
-          <button class="sim-play" id="sim-play" title="Play/Pause">&#9654;</button>
+          <button type="button" class="sim-play" id="sim-play" title="Play/Pause">&#9654;</button>
           <div class="sim-slider-wrap">
             <input type="range" class="sim-slider" id="sim-slider" min="0" max="1440" value="0" step="1" />
             <div class="sim-time-labels">
@@ -722,7 +772,7 @@
             </div>
           </div>
           <div class="sim-clock" id="sim-clock">00:00</div>
-          <button class="sim-speed" id="sim-speed" title="Speed">1x</button>
+          <button type="button" class="sim-speed" id="sim-speed" title="Speed">1x</button>
         </div>
       </div>
 

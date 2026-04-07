@@ -2,13 +2,13 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import {
   allScenes,
-  trainingHistory,
-  getLoadFactor,
   coolingEnergyBase,
+  type Equipment,
+  getLoadFactor,
   peakTempBase,
   type SceneGraph,
-  type Equipment,
   type Score,
+  trainingHistory,
 } from "./data/sceneGraphs";
 
 // ===== State =====
@@ -22,6 +22,27 @@ let roomGroup: THREE.Group;
 let heatmapGroup: THREE.Group;
 let animating = false;
 let heatmapVisible = false;
+let airflowVisible = false;
+let airflowGroup: THREE.Group;
+let zonesGroup: THREE.Group;
+let zonesVisible = false;
+
+// Airflow streamline system
+const STREAMLINE_COUNT = 500;
+const TRAIL_LENGTH = 40; // points per streamline
+const SEGMENT_COUNT = STREAMLINE_COUNT * (TRAIL_LENGTH - 1); // line segments
+const VERTEX_COUNT = SEGMENT_COUNT * 2; // 2 vertices per segment
+
+// Per-streamline state
+let streamlineHeads: Float32Array; // current position (x,y,z per streamline)
+let streamlineVelocities: Float32Array; // current velocity
+let streamlineAges: Float32Array;
+let streamlineMaxAges: Float32Array;
+// Trail geometry buffers
+let trailPositions: Float32Array;
+let trailColors: Float32Array;
+let trailGeometry: THREE.BufferGeometry;
+let trailLines: THREE.LineSegments;
 
 // Simulation state
 let simPlaying = false;
@@ -42,12 +63,7 @@ function init() {
   scene.background = new THREE.Color(0x0a0e17);
 
   // Camera — 서버실 크기(12x9)에 맞춰 조정
-  camera = new THREE.PerspectiveCamera(
-    50,
-    canvas.clientWidth / canvas.clientHeight,
-    0.1,
-    200
-  );
+  camera = new THREE.PerspectiveCamera(50, canvas.clientWidth / canvas.clientHeight, 0.1, 200);
   camera.position.set(16, 12, 16);
   camera.lookAt(6, 0, 4.5);
 
@@ -83,14 +99,19 @@ function init() {
   roomGroup = new THREE.Group();
   furnitureGroup = new THREE.Group();
   heatmapGroup = new THREE.Group();
-  scene.add(roomGroup);
-  scene.add(furnitureGroup);
-  scene.add(heatmapGroup);
-
-  // Grid
+  airflowGroup = new THREE.Group();
+  zonesGroup = new THREE.Group();
   const grid = new THREE.GridHelper(18, 36, 0x1a2744, 0x111a2a);
   grid.position.set(6, -0.01, 4.5);
   scene.add(grid);
+
+  scene.add(roomGroup);
+  scene.add(furnitureGroup);
+  scene.add(heatmapGroup);
+  scene.add(airflowGroup);
+  scene.add(zonesGroup);
+
+  // Grid
 
   buildScene(allScenes[currentSceneIndex]);
   updateUI(allScenes[currentSceneIndex]);
@@ -111,6 +132,13 @@ function animate(now: number = 0) {
     if (simMinutes >= 1440) simMinutes = 0;
     updateSimSlider();
     updateSimulation();
+  }
+
+  // Airflow streamlines update every frame (independent of simulation tick)
+  if (airflowVisible && streamlineHeads) {
+    const hour = simMinutes / 60;
+    const loadFactor = getLoadFactor(hour);
+    updateAirflow(allScenes[currentSceneIndex], loadFactor);
   }
 
   renderer.render(scene, camera);
@@ -145,7 +173,10 @@ function buildRoom(sceneData: SceneGraph) {
 
   // 바닥 타일 그리드 (raised floor 느낌)
   const tileSize = 0.6;
-  const tileMat = new THREE.LineBasicMaterial({ color: 0xb0b0b0, linewidth: 1 });
+  const tileMat = new THREE.LineBasicMaterial({
+    color: 0xb0b0b0,
+    linewidth: 1,
+  });
   for (let x = 0; x <= rw; x += tileSize) {
     const geo = new THREE.BufferGeometry().setFromPoints([
       new THREE.Vector3(x, 0.002, 0),
@@ -189,7 +220,10 @@ function buildRoom(sceneData: SceneGraph) {
   roomGroup.add(eastWall);
 
   // Floor outline
-  const edgeMat = new THREE.LineBasicMaterial({ color: 0x00bcd4, linewidth: 2 });
+  const edgeMat = new THREE.LineBasicMaterial({
+    color: 0x00bcd4,
+    linewidth: 2,
+  });
   const floorOutline = new THREE.BufferGeometry().setFromPoints([
     new THREE.Vector3(0, 0.005, 0),
     new THREE.Vector3(rw, 0.005, 0),
@@ -253,9 +287,10 @@ function buildRoom(sceneData: SceneGraph) {
       const arrowOrigin = new THREE.Vector3(
         opening.position[0],
         opening.position[1],
-        opening.wall === "north" ? 0.2 : opening.wall === "south" ? rd - 0.2 : opening.position[2]
+        opening.wall === "north" ? 0.2 : opening.wall === "south" ? rd - 0.2 : opening.position[2],
       );
-      if (opening.wall === "east") arrowOrigin.set(rw - 0.2, opening.position[1], opening.position[2]);
+      if (opening.wall === "east")
+        arrowOrigin.set(rw - 0.2, opening.position[1], opening.position[2]);
       if (opening.wall === "west") arrowOrigin.set(0.2, opening.position[1], opening.position[2]);
 
       const arrow = new THREE.ArrowHelper(arrowDir, arrowOrigin, 1.2, 0x00bcd4, 0.3, 0.15);
@@ -273,7 +308,11 @@ function buildHeatmap(sceneData: SceneGraph, loadFactor = 1.0) {
   // 각 장비의 발열량 * 부하계수로 히트맵 생성
   const heatSources = sceneData.furniture
     .filter((f) => f.heatOutput > 0)
-    .map((f) => ({ x: f.position[0], z: f.position[2], heat: f.heatOutput * loadFactor }));
+    .map((f) => ({
+      x: f.position[0],
+      z: f.position[2],
+      heat: f.heatOutput * loadFactor,
+    }));
 
   const coolingSources = sceneData.furniture.filter((f) => f.category === "cooling_unit");
 
@@ -327,6 +366,688 @@ function buildHeatmap(sceneData: SceneGraph, loadFactor = 1.0) {
   return maxHeatValue;
 }
 
+// ===== Airflow Streamline System =====
+// Each streamline is a head particle that leaves a trail of line segments behind it.
+// This creates the CFD-like flow visualization seen in professional airflow analysis.
+
+// Per-streamline trail history: ring buffer of past positions
+let trailHistory: Float32Array; // STREAMLINE_COUNT * TRAIL_LENGTH * 3
+let trailHistoryIdx: Int32Array; // write cursor per streamline
+
+function makeTextSprite(text: string, color: string): THREE.Sprite {
+  const canvas = document.createElement("canvas");
+  canvas.width = 128;
+  canvas.height = 48;
+  const ctx = canvas.getContext("2d")!;
+  ctx.font = "bold 28px monospace";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = color;
+  ctx.globalAlpha = 0.25;
+  const tw = ctx.measureText(text).width + 16;
+  ctx.beginPath();
+  ctx.roundRect((128 - tw) / 2, 6, tw, 36, 6);
+  ctx.fill();
+  ctx.globalAlpha = 0.9;
+  ctx.fillStyle = color;
+  ctx.fillText(text, 64, 24);
+  const tex = new THREE.CanvasTexture(canvas);
+  const mat = new THREE.SpriteMaterial({
+    map: tex,
+    transparent: true,
+    depthWrite: false,
+  });
+  const sprite = new THREE.Sprite(mat);
+  sprite.scale.set(1.2, 0.45, 1);
+  return sprite;
+}
+
+function initAirflow(sceneData: SceneGraph) {
+  airflowGroup.clear();
+
+  streamlineHeads = new Float32Array(STREAMLINE_COUNT * 3);
+  streamlineVelocities = new Float32Array(STREAMLINE_COUNT * 3);
+  streamlineAges = new Float32Array(STREAMLINE_COUNT);
+  streamlineMaxAges = new Float32Array(STREAMLINE_COUNT);
+  trailHistory = new Float32Array(STREAMLINE_COUNT * TRAIL_LENGTH * 3);
+  trailHistoryIdx = new Int32Array(STREAMLINE_COUNT);
+
+  // Trail rendering: each streamline has (TRAIL_LENGTH-1) segments, each segment = 2 vertices
+  trailPositions = new Float32Array(VERTEX_COUNT * 3);
+  trailColors = new Float32Array(VERTEX_COUNT * 3);
+
+  const coolingSources = sceneData.furniture.filter((f) => f.category === "cooling_unit");
+  const [rw, , rd] = sceneData.room.dimensions;
+
+  // Pre-cache heat sources so resetStreamline can use them
+  cachedHeatSources = sceneData.furniture
+    .filter((f) => f.heatOutput > 0)
+    .map((f) => {
+      const rotY = THREE.MathUtils.degToRad(f.rotation[1]);
+      const frontX = Math.sin(rotY);
+      const frontZ = Math.cos(rotY);
+      return {
+        x: f.position[0],
+        z: f.position[2],
+        heat: f.heatOutput,
+        h: f.size[1],
+        frontX,
+        frontZ,
+        backX: -frontX,
+        backZ: -frontZ,
+      };
+    });
+
+  for (let i = 0; i < STREAMLINE_COUNT; i++) {
+    resetStreamline(i, coolingSources, rw, rd);
+    // Stagger so trails build up gradually
+    streamlineAges[i] = Math.random() * streamlineMaxAges[i] * 0.5;
+    // Pre-fill trail history with spawn position
+    const hx = streamlineHeads[i * 3];
+    const hy = streamlineHeads[i * 3 + 1];
+    const hz = streamlineHeads[i * 3 + 2];
+    for (let t = 0; t < TRAIL_LENGTH; t++) {
+      const ti = (i * TRAIL_LENGTH + t) * 3;
+      trailHistory[ti] = hx;
+      trailHistory[ti + 1] = hy;
+      trailHistory[ti + 2] = hz;
+    }
+  }
+
+  trailGeometry = new THREE.BufferGeometry();
+  trailGeometry.setAttribute("position", new THREE.BufferAttribute(trailPositions, 3));
+  trailGeometry.setAttribute("color", new THREE.BufferAttribute(trailColors, 3));
+
+  const trailMat = new THREE.LineBasicMaterial({
+    vertexColors: true,
+    transparent: true,
+    opacity: 0.85,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    linewidth: 1,
+  });
+
+  trailLines = new THREE.LineSegments(trailGeometry, trailMat);
+  airflowGroup.add(trailLines);
+
+  // === Cold / Hot zone indicators + Problem markers → zonesGroup ===
+  zonesGroup.clear();
+  const quality = sceneData.score.total;
+  const serverRacks = sceneData.furniture.filter((f) => f.heatOutput > 0);
+
+  for (const rack of serverRacks) {
+    const rotY = THREE.MathUtils.degToRad(rack.rotation[1]);
+    const frontX = Math.sin(rotY);
+    const frontZ = Math.cos(rotY);
+    const [rackW, rackH, _rackD] = rack.size;
+    const zoneDepth = 1.2;
+    const zoneW = rackW + 0.6;
+    const zoneH = rackH + 0.3;
+
+    // Cold zone (front)
+    const coldGeo = new THREE.BoxGeometry(zoneW, zoneH, zoneDepth);
+    const coldZone = new THREE.Mesh(
+      coldGeo,
+      new THREE.MeshBasicMaterial({
+        color: 0x44aaff,
+        transparent: true,
+        opacity: 0.28,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      }),
+    );
+    coldZone.position.set(
+      rack.position[0] + frontX * (zoneDepth / 2 - 0.1),
+      rackH / 2,
+      rack.position[2] + frontZ * (zoneDepth / 2 - 0.1),
+    );
+    coldZone.rotation.y = rotY;
+    zonesGroup.add(coldZone);
+
+    const coldEdge = new THREE.LineSegments(
+      new THREE.EdgesGeometry(coldGeo),
+      new THREE.LineBasicMaterial({ color: 0x44aaff, transparent: true, opacity: 0.35 }),
+    );
+    coldEdge.position.copy(coldZone.position);
+    coldEdge.rotation.copy(coldZone.rotation);
+    zonesGroup.add(coldEdge);
+
+    // Hot zone (back)
+    const hotGeo = new THREE.BoxGeometry(zoneW, zoneH + 0.5, zoneDepth);
+    const hotZone = new THREE.Mesh(
+      hotGeo,
+      new THREE.MeshBasicMaterial({
+        color: 0xffdd44,
+        transparent: true,
+        opacity: 0.28,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      }),
+    );
+    hotZone.position.set(
+      rack.position[0] - frontX * (zoneDepth / 2 - 0.1),
+      (rackH + 0.5) / 2,
+      rack.position[2] - frontZ * (zoneDepth / 2 - 0.1),
+    );
+    hotZone.rotation.y = rotY;
+    zonesGroup.add(hotZone);
+
+    const hotEdge = new THREE.LineSegments(
+      new THREE.EdgesGeometry(hotGeo),
+      new THREE.LineBasicMaterial({ color: 0xffdd44, transparent: true, opacity: 0.35 }),
+    );
+    hotEdge.position.copy(hotZone.position);
+    hotEdge.rotation.copy(hotZone.rotation);
+    zonesGroup.add(hotEdge);
+
+    // Arrows
+    const coldArrow = new THREE.ArrowHelper(
+      new THREE.Vector3(-frontX, 0, -frontZ),
+      new THREE.Vector3(
+        rack.position[0] + frontX * (zoneDepth + 0.1),
+        rackH * 0.5,
+        rack.position[2] + frontZ * (zoneDepth + 0.1),
+      ),
+      0.7,
+      0x44aaff,
+      0.15,
+      0.1,
+    );
+    zonesGroup.add(coldArrow);
+
+    const hotArrow = new THREE.ArrowHelper(
+      new THREE.Vector3(0, 1, 0),
+      new THREE.Vector3(
+        rack.position[0] - frontX * (zoneDepth * 0.4),
+        rackH + 0.2,
+        rack.position[2] - frontZ * (zoneDepth * 0.4),
+      ),
+      0.7,
+      0xff3300,
+      0.15,
+      0.1,
+    );
+    zonesGroup.add(hotArrow);
+  }
+
+  // === Problem markers for BAD layouts ===
+  if (quality < 0.6) {
+    for (let a = 0; a < serverRacks.length; a++) {
+      const rackA = serverRacks[a];
+      const rotA = THREE.MathUtils.degToRad(rackA.rotation[1]);
+      const backAx = rackA.position[0] - Math.sin(rotA) * 1.5;
+      const backAz = rackA.position[2] - Math.cos(rotA) * 1.5;
+
+      for (let b = 0; b < serverRacks.length; b++) {
+        if (a === b) continue;
+        const rackB = serverRacks[b];
+        const rotB = THREE.MathUtils.degToRad(rackB.rotation[1]);
+        const frontBx = rackB.position[0] + Math.sin(rotB) * 1.0;
+        const frontBz = rackB.position[2] + Math.cos(rotB) * 1.0;
+        const dist = Math.sqrt((backAx - frontBx) ** 2 + (backAz - frontBz) ** 2);
+
+        if (dist < 2.5) {
+          const midX = (backAx + frontBx) / 2;
+          const midZ = (backAz + frontBz) / 2;
+          const overlapH = Math.max(rackA.size[1], rackB.size[1]) + 0.3;
+          const spanX = Math.abs(backAx - frontBx) + 1.2;
+          const spanZ = Math.abs(backAz - frontBz) + 1.2;
+          const recircGeo = new THREE.BoxGeometry(spanX, overlapH, spanZ);
+          const recircZone = new THREE.Mesh(
+            recircGeo,
+            new THREE.MeshBasicMaterial({
+              color: 0xff1744,
+              transparent: true,
+              opacity: 0.12,
+              side: THREE.DoubleSide,
+              depthWrite: false,
+            }),
+          );
+          recircZone.position.set(midX, overlapH / 2, midZ);
+          zonesGroup.add(recircZone);
+
+          const recircEdge = new THREE.LineSegments(
+            new THREE.EdgesGeometry(recircGeo),
+            new THREE.LineBasicMaterial({ color: 0xff1744, transparent: true, opacity: 0.4 }),
+          );
+          recircEdge.position.copy(recircZone.position);
+          zonesGroup.add(recircEdge);
+        }
+      }
+    }
+
+    for (const cool of coolingSources) {
+      let reachesAny = false;
+      for (const rack of serverRacks) {
+        const rotR = THREE.MathUtils.degToRad(rack.rotation[1]);
+        const frontRx = rack.position[0] + Math.sin(rotR) * 0.5;
+        const frontRz = rack.position[2] + Math.cos(rotR) * 0.5;
+        const dist = Math.sqrt(
+          (cool.position[0] - frontRx) ** 2 + (cool.position[2] - frontRz) ** 2,
+        );
+        if (dist < 4.0) {
+          reachesAny = true;
+          break;
+        }
+      }
+      if (!reachesAny) {
+        const bypassLabel = makeTextSprite("BYPASS", "#ffab00");
+        bypassLabel.position.set(cool.position[0], cool.size[1] + 0.5, cool.position[2]);
+        zonesGroup.add(bypassLabel);
+      }
+    }
+  }
+
+  zonesGroup.visible = zonesVisible;
+  airflowGroup.visible = airflowVisible;
+}
+
+// Cached scene data for resetStreamline
+let cachedHeatSources: {
+  x: number;
+  z: number;
+  heat: number;
+  h: number;
+  frontX: number;
+  frontZ: number;
+  backX: number;
+  backZ: number;
+}[] = [];
+
+function resetStreamline(i: number, coolingSources: Equipment[], rw: number, rd: number) {
+  const idx = i * 3;
+  const roll = Math.random();
+
+  if (roll < 0.45 && cachedHeatSources.length > 0) {
+    // === 45%: Spawn at SERVER RACK BACK — hot air exhaust inside hot zone ===
+    const src = cachedHeatSources[Math.floor(Math.random() * cachedHeatSources.length)];
+    // Spawn inside the hot zone (back side of rack, within zone volume)
+    const backOff = 0.3 + Math.random() * 0.7;
+    streamlineHeads[idx] = src.x + src.backX * backOff + (Math.random() - 0.5) * 0.3;
+    streamlineHeads[idx + 1] = 0.3 + Math.random() * src.h;
+    streamlineHeads[idx + 2] = src.z + src.backZ * backOff + (Math.random() - 0.5) * 0.3;
+
+    // Initial velocity: outward from back + upward
+    streamlineVelocities[idx] = src.backX * 0.012 + (Math.random() - 0.5) * 0.003;
+    streamlineVelocities[idx + 1] = 0.01 + Math.random() * 0.015;
+    streamlineVelocities[idx + 2] = src.backZ * 0.012 + (Math.random() - 0.5) * 0.003;
+  } else if (roll < 0.8 && coolingSources.length > 0) {
+    // === 35%: Spawn at COOLING UNIT bottom — cold air flowing along floor ===
+    const cool = coolingSources[Math.floor(Math.random() * coolingSources.length)];
+    streamlineHeads[idx] = cool.position[0] + (Math.random() - 0.5) * cool.size[0];
+    streamlineHeads[idx + 1] = 0.05 + Math.random() * 0.3; // Near floor
+    streamlineHeads[idx + 2] = cool.position[2] + (Math.random() - 0.5) * cool.size[2];
+
+    // Initial velocity: toward the FRONT zone of a server rack (cold aisle supply)
+    let bestDx = (Math.random() - 0.5) * 0.02;
+    let bestDz = (Math.random() - 0.5) * 0.02;
+    if (cachedHeatSources.length > 0) {
+      const target = cachedHeatSources[Math.floor(Math.random() * cachedHeatSources.length)];
+      // Aim toward the front zone center (where cold zone box is)
+      const frontTargetX = target.x + target.frontX * 0.6;
+      const frontTargetZ = target.z + target.frontZ * 0.6;
+      const dx = frontTargetX - cool.position[0];
+      const dz = frontTargetZ - cool.position[2];
+      const dist = Math.sqrt(dx * dx + dz * dz) + 0.1;
+      bestDx = (dx / dist) * 0.02 + (Math.random() - 0.5) * 0.003;
+      bestDz = (dz / dist) * 0.02 + (Math.random() - 0.5) * 0.003;
+    }
+    streamlineVelocities[idx] = bestDx;
+    streamlineVelocities[idx + 1] = -0.001 + Math.random() * 0.001;
+    streamlineVelocities[idx + 2] = bestDz;
+  } else {
+    // === 20%: Spawn at CEILING near servers — return air path ===
+    const [, roomH] = [rw, 3.5]; // room height
+    if (cachedHeatSources.length > 0) {
+      const src = cachedHeatSources[Math.floor(Math.random() * cachedHeatSources.length)];
+      streamlineHeads[idx] = src.x + (Math.random() - 0.5) * 2;
+      streamlineHeads[idx + 1] = roomH - 0.3 - Math.random() * 0.5;
+      streamlineHeads[idx + 2] = src.z + (Math.random() - 0.5) * 2;
+    } else {
+      streamlineHeads[idx] = Math.random() * rw;
+      streamlineHeads[idx + 1] = roomH - 0.3 - Math.random() * 0.5;
+      streamlineHeads[idx + 2] = Math.random() * rd;
+    }
+
+    // Initial velocity: horizontal drift toward nearest CRAC
+    let driftX = (Math.random() - 0.5) * 0.01;
+    let driftZ = (Math.random() - 0.5) * 0.01;
+    if (coolingSources.length > 0) {
+      const cool = coolingSources[Math.floor(Math.random() * coolingSources.length)];
+      const dx = cool.position[0] - streamlineHeads[idx];
+      const dz = cool.position[2] - streamlineHeads[idx + 2];
+      const dist = Math.sqrt(dx * dx + dz * dz) + 0.1;
+      driftX = (dx / dist) * 0.015;
+      driftZ = (dz / dist) * 0.015;
+    }
+    streamlineVelocities[idx] = driftX;
+    streamlineVelocities[idx + 1] = -0.003 - Math.random() * 0.003; // Descending toward CRAC intake
+    streamlineVelocities[idx + 2] = driftZ;
+  }
+
+  streamlineAges[i] = 0;
+  streamlineMaxAges[i] = 200 + Math.random() * 300;
+  trailHistoryIdx[i] = 0;
+
+  // Fill trail history with current position (collapsed trail)
+  const hx = streamlineHeads[idx];
+  const hy = streamlineHeads[idx + 1];
+  const hz = streamlineHeads[idx + 2];
+  for (let t = 0; t < TRAIL_LENGTH; t++) {
+    const ti = (i * TRAIL_LENGTH + t) * 3;
+    trailHistory[ti] = hx;
+    trailHistory[ti + 1] = hy;
+    trailHistory[ti + 2] = hz;
+  }
+}
+
+function computeTemperatureColor(temp: number): [number, number, number] {
+  // Blue(cold) → Cyan → White → Yellow → Red(hot)
+  if (temp < 0.2) {
+    return [0.1, 0.2 + temp * 4, 1.0];
+  } else if (temp < 0.4) {
+    const t2 = (temp - 0.2) * 5;
+    return [0.1 + t2 * 0.5, 0.6 + t2 * 0.4, 1.0];
+  } else if (temp < 0.6) {
+    const t2 = (temp - 0.4) * 5;
+    return [0.6 + t2 * 0.4, 1.0, 1.0 - t2];
+  } else if (temp < 0.8) {
+    const t2 = (temp - 0.6) * 5;
+    return [1.0, 1.0 - t2 * 0.5, 0];
+  } else {
+    const t2 = (temp - 0.8) * 5;
+    return [1.0, Math.max(0.5 - t2 * 0.5, 0.1), 0];
+  }
+}
+
+function updateAirflow(sceneData: SceneGraph, loadFactor: number) {
+  if (!airflowVisible || !streamlineHeads) return;
+
+  // === Scene quality → airflow behavior ===
+  // Low quality (random, 0.15) → chaotic, turbulent, recirculation, mixed colors
+  // High quality (RL, 0.91)   → laminar, clean front→back→up, separated colors
+  const quality = sceneData.score.total;
+  const chaos = 1 - quality; // 0.85 for random, 0.09 for RL
+
+  // Turbulence strength: chaotic layouts have 10x more turbulence
+  const turbulence = 0.0003 + chaos * 0.003;
+  // Damping: good layouts have smoother flow
+  const damping = 0.96 - chaos * 0.04; // 0.92 random, 0.96 RL
+  // How strongly directional forces work (front/back distinction)
+  const directionality = quality; // 0.15 random (barely works), 0.91 RL (very clean)
+
+  // Cache heat sources with front/back direction
+  cachedHeatSources = sceneData.furniture
+    .filter((f) => f.heatOutput > 0)
+    .map((f) => {
+      const rotY = THREE.MathUtils.degToRad(f.rotation[1]);
+      const frontX = Math.sin(rotY);
+      const frontZ = Math.cos(rotY);
+      return {
+        x: f.position[0],
+        z: f.position[2],
+        heat: f.heatOutput * loadFactor,
+        h: f.size[1],
+        frontX,
+        frontZ,
+        backX: -frontX,
+        backZ: -frontZ,
+      };
+    });
+
+  const coolingSources = sceneData.furniture.filter((f) => f.category === "cooling_unit");
+  const [rw, rh, rd] = sceneData.room.dimensions;
+
+  for (let i = 0; i < STREAMLINE_COUNT; i++) {
+    const idx = i * 3;
+    streamlineAges[i]++;
+
+    const px = streamlineHeads[idx];
+    const py = streamlineHeads[idx + 1];
+    const pz = streamlineHeads[idx + 2];
+
+    // Respawn check
+    if (
+      streamlineAges[i] > streamlineMaxAges[i] ||
+      py > rh + 0.3 ||
+      py < -0.1 ||
+      px < -0.5 ||
+      px > rw + 0.5 ||
+      pz < -0.5 ||
+      pz > rd + 0.5
+    ) {
+      resetStreamline(i, coolingSources, rw, rd);
+      continue;
+    }
+
+    // === Physics ===
+    let heatInfluence = 0;
+    let forceX = 0;
+    let forceY = 0;
+    let forceZ = 0;
+
+    // --- Server racks: DIRECTIONAL airflow (front=intake, back=exhaust) ---
+    for (const src of cachedHeatSources) {
+      const dx = px - src.x;
+      const dz = pz - src.z;
+      const distSq = dx * dx + dz * dz;
+      const dist = Math.sqrt(distSq);
+
+      if (dist < 3.5) {
+        const strength = src.heat / (1 + distSq);
+        heatInfluence += strength;
+
+        // Determine front vs back side using dot product
+        const dotFront = dx * src.frontX + dz * src.frontZ;
+
+        if (dist < 2.0 && py <= src.h) {
+          if (dotFront > 0) {
+            // === FRONT SIDE (cold aisle): cold air sucked IN ===
+            // directionality controls how clean this works
+            const pull = strength * (0.003 + directionality * 0.004);
+            forceX -= (dx / (dist + 0.1)) * pull;
+            forceZ -= (dz / (dist + 0.1)) * pull;
+            if (py < 0.5) forceY -= 0.001;
+          } else {
+            // === BACK SIDE (hot aisle): hot air BLOWS OUT and RISES ===
+            const push = strength * (0.004 + directionality * 0.005);
+            forceX += src.backX * push;
+            forceZ += src.backZ * push;
+            forceY += strength * (0.008 + directionality * 0.008);
+          }
+
+          // BAD LAYOUT EFFECT: recirculation — hot air leaks to wrong side
+          // In chaotic layouts, forces are partially random/reversed
+          if (chaos > 0.5) {
+            const leak = (chaos - 0.5) * 2 * strength * 0.004;
+            forceX += (Math.random() - 0.5) * leak * 2;
+            forceZ += (Math.random() - 0.5) * leak * 2;
+            // Hot air pushed sideways instead of cleanly up
+            forceY -= leak * 0.5;
+          }
+        } else if (py > src.h && dist < 2.0) {
+          // Above rack: hot exhaust continues rising
+          forceY += strength * (0.006 + directionality * 0.006);
+          const push = strength * 0.001;
+          forceX += (dx / (dist + 0.1)) * push;
+          forceZ += (dz / (dist + 0.1)) * push;
+        } else if (py < 0.5 && dist < 3.5) {
+          // Floor-level: cold air drawn toward server FRONT side
+          const toFrontX = src.x + src.frontX * 0.6 - px;
+          const toFrontZ = src.z + src.frontZ * 0.6 - pz;
+          const toFrontDist = Math.sqrt(toFrontX * toFrontX + toFrontZ * toFrontZ) + 0.1;
+          const pull = strength * 0.002 * directionality;
+          forceX += (toFrontX / toFrontDist) * pull;
+          forceZ += (toFrontZ / toFrontDist) * pull;
+
+          // BAD LAYOUT: cold air wanders randomly, doesn't reach servers (bypass)
+          if (chaos > 0.4) {
+            const bypass = (chaos - 0.4) * 0.005;
+            forceX += (Math.random() - 0.5) * bypass;
+            forceZ += (Math.random() - 0.5) * bypass;
+          }
+        }
+      }
+    }
+
+    // --- Cooling units ---
+    for (const cool of coolingSources) {
+      const dx = px - cool.position[0];
+      const dz = pz - cool.position[2];
+      const dist = Math.sqrt(dx * dx + dz * dz);
+
+      if (py < 1.0 && dist < 4.0) {
+        // COLD AIR OUTPUT: push outward along floor
+        const blowStrength = (0.008 * loadFactor) / (1 + dist * 0.3);
+        forceX += (dx / (dist + 0.1)) * blowStrength;
+        forceZ += (dz / (dist + 0.1)) * blowStrength;
+        forceY -= 0.002;
+      }
+
+      if (py > 1.5 && dist < 6.0) {
+        // RETURN AIR: pulled toward CRAC intake
+        // Good layouts: clean return path. Bad layouts: weak, air wanders.
+        const pullStrength = ((0.003 + directionality * 0.003) * loadFactor) / (1 + dist * 0.3);
+        forceX -= (dx / (dist + 0.1)) * pullStrength;
+        forceZ -= (dz / (dist + 0.1)) * pullStrength;
+        if (dist < 2.0) {
+          forceY -= pullStrength * 1.5;
+        }
+      }
+    }
+
+    // Buoyancy
+    if (heatInfluence > 0.2) {
+      forceY += heatInfluence * 0.005;
+    }
+
+    // CEILING: hard barrier
+    if (py > rh - 0.5) {
+      const penetration = (py - (rh - 0.5)) / 0.5;
+      forceY -= 0.015 + penetration * 0.02;
+      for (const cool of coolingSources) {
+        const dx = cool.position[0] - px;
+        const dz = cool.position[2] - pz;
+        const dist = Math.sqrt(dx * dx + dz * dz) + 0.1;
+        forceX += (dx / dist) * 0.005;
+        forceZ += (dz / dist) * 0.005;
+      }
+    }
+
+    // Floor
+    if (py < 0.1 && heatInfluence < 0.5) {
+      forceY += 0.001;
+    }
+
+    // Walls
+    if (px < 0.3) forceX += 0.004;
+    if (px > rw - 0.3) forceX -= 0.004;
+    if (pz < 0.3) forceZ += 0.004;
+    if (pz > rd - 0.3) forceZ -= 0.004;
+
+    // Apply forces with quality-based damping
+    streamlineVelocities[idx] = streamlineVelocities[idx] * damping + forceX;
+    streamlineVelocities[idx + 1] = streamlineVelocities[idx + 1] * damping + forceY;
+    streamlineVelocities[idx + 2] = streamlineVelocities[idx + 2] * damping + forceZ;
+
+    // Speed limit
+    const speed = Math.sqrt(
+      streamlineVelocities[idx] ** 2 +
+        streamlineVelocities[idx + 1] ** 2 +
+        streamlineVelocities[idx + 2] ** 2,
+    );
+    const maxSpeed = 0.07 * (0.5 + loadFactor);
+    if (speed > maxSpeed) {
+      const s = maxSpeed / speed;
+      streamlineVelocities[idx] *= s;
+      streamlineVelocities[idx + 1] *= s;
+      streamlineVelocities[idx + 2] *= s;
+    }
+
+    // Turbulence: BAD layouts = much more chaotic motion
+    streamlineVelocities[idx] += (Math.random() - 0.5) * turbulence * 2;
+    streamlineVelocities[idx + 1] += (Math.random() - 0.5) * turbulence;
+    streamlineVelocities[idx + 2] += (Math.random() - 0.5) * turbulence * 2;
+
+    // Update position
+    streamlineHeads[idx] += streamlineVelocities[idx];
+    streamlineHeads[idx + 1] += streamlineVelocities[idx + 1];
+    streamlineHeads[idx + 2] += streamlineVelocities[idx + 2];
+
+    // Floor clamp
+    if (streamlineHeads[idx + 1] < 0.02) {
+      streamlineHeads[idx + 1] = 0.02;
+      streamlineVelocities[idx + 1] = Math.abs(streamlineVelocities[idx + 1]) * 0.1;
+    }
+
+    // Ceiling clamp
+    if (streamlineHeads[idx + 1] > rh - 0.05) {
+      streamlineHeads[idx + 1] = rh - 0.05;
+      streamlineVelocities[idx + 1] = -Math.abs(streamlineVelocities[idx + 1]) * 0.3;
+    }
+
+    // Record head position into trail ring buffer
+    const cursor = trailHistoryIdx[i] % TRAIL_LENGTH;
+    const hi = (i * TRAIL_LENGTH + cursor) * 3;
+    trailHistory[hi] = streamlineHeads[idx];
+    trailHistory[hi + 1] = streamlineHeads[idx + 1];
+    trailHistory[hi + 2] = streamlineHeads[idx + 2];
+    trailHistoryIdx[i]++;
+
+    // === Build line segments from trail history ===
+    const segBase = i * (TRAIL_LENGTH - 1);
+    const currentCursor = trailHistoryIdx[i];
+
+    for (let s = 0; s < TRAIL_LENGTH - 1; s++) {
+      const vIdx = (segBase + s) * 2;
+
+      const older = (currentCursor + s) % TRAIL_LENGTH;
+      const newer = (currentCursor + s + 1) % TRAIL_LENGTH;
+
+      const oldOff = (i * TRAIL_LENGTH + older) * 3;
+      const newOff = (i * TRAIL_LENGTH + newer) * 3;
+
+      trailPositions[vIdx * 3] = trailHistory[oldOff];
+      trailPositions[vIdx * 3 + 1] = trailHistory[oldOff + 1];
+      trailPositions[vIdx * 3 + 2] = trailHistory[oldOff + 2];
+
+      trailPositions[(vIdx + 1) * 3] = trailHistory[newOff];
+      trailPositions[(vIdx + 1) * 3 + 1] = trailHistory[newOff + 1];
+      trailPositions[(vIdx + 1) * 3 + 2] = trailHistory[newOff + 2];
+
+      // Color per-segment: local temperature at segment position
+      const segX = trailHistory[oldOff];
+      const segY = trailHistory[oldOff + 1];
+      const segZ = trailHistory[oldOff + 2];
+
+      let localHeat = 0;
+      for (const src of cachedHeatSources) {
+        const sdx = segX - src.x;
+        const sdz = segZ - src.z;
+        const sd = sdx * sdx + sdz * sdz;
+        localHeat += src.heat / (1 + sd);
+      }
+      const heightTemp = Math.min(segY / rh, 1) * 0.35;
+      const segTemp = Math.min(localHeat / 8 + heightTemp, 1);
+      const [cr, cg, cb] = computeTemperatureColor(segTemp);
+
+      const ageFade = s / (TRAIL_LENGTH - 1);
+      const brightness = ageFade * ageFade * 0.9 + 0.1;
+
+      trailColors[vIdx * 3] = cr * brightness;
+      trailColors[vIdx * 3 + 1] = cg * brightness;
+      trailColors[vIdx * 3 + 2] = cb * brightness;
+
+      trailColors[(vIdx + 1) * 3] = cr * Math.min(brightness * 1.3, 1);
+      trailColors[(vIdx + 1) * 3 + 1] = cg * Math.min(brightness * 1.3, 1);
+      trailColors[(vIdx + 1) * 3 + 2] = cb * Math.min(brightness * 1.3, 1);
+    }
+  }
+
+  trailGeometry.attributes.position.needsUpdate = true;
+  trailGeometry.attributes.color.needsUpdate = true;
+}
+
 // ===== Simulation =====
 function updateSimSlider() {
   const slider = document.getElementById("sim-slider") as HTMLInputElement;
@@ -344,6 +1065,9 @@ function updateSimulation() {
 
   // 히트맵 업데이트
   const maxHeat = buildHeatmap(sceneData, loadFactor);
+
+  // Airflow 업데이트
+  updateAirflow(sceneData, loadFactor);
 
   // 서버 랙 LED glow 업데이트
   updateEquipmentGlow(loadFactor);
@@ -363,7 +1087,12 @@ function updateEquipmentGlow(loadFactor: number) {
       const mat = obj.material as THREE.MeshBasicMaterial | THREE.MeshStandardMaterial;
 
       // 서버 랙 상단 glow 업데이트
-      if (category === "server_rack" && mat.transparent && 'opacity' in mat && mat.side === THREE.DoubleSide) {
+      if (
+        category === "server_rack" &&
+        mat.transparent &&
+        "opacity" in mat &&
+        mat.side === THREE.DoubleSide
+      ) {
         const effectiveHeat = (heatOutput || 0) * loadFactor;
         mat.opacity = 0.05 + effectiveHeat * 0.02;
         if (effectiveHeat > 10) mat.color.setHex(0xff3300);
@@ -372,14 +1101,19 @@ function updateEquipmentGlow(loadFactor: number) {
       }
 
       // 냉각 장치 glow 업데이트
-      if (category === "cooling_unit" && mat.transparent && 'opacity' in mat && mat.side === THREE.DoubleSide) {
+      if (
+        category === "cooling_unit" &&
+        mat.transparent &&
+        "opacity" in mat &&
+        mat.side === THREE.DoubleSide
+      ) {
         mat.opacity = 0.03 + 0.12 * loadFactor;
       }
     });
   });
 }
 
-function updateMonitorPanel(sceneData: SceneGraph, loadFactor: number, maxHeat: number) {
+function updateMonitorPanel(sceneData: SceneGraph, loadFactor: number, _maxHeat: number) {
   // Load
   const loadPct = Math.round(loadFactor * 100);
   const loadEl = document.getElementById("mon-load")!;
@@ -396,10 +1130,9 @@ function updateMonitorPanel(sceneData: SceneGraph, loadFactor: number, maxHeat: 
   const currentMaxTemp = Math.round(ambientTemp + (basePeakTemp - ambientTemp) * loadFactor);
   const tempEl = document.getElementById("mon-temp")!;
   tempEl.innerHTML = `${currentMaxTemp}<span class="mon-unit">&deg;C</span>`;
-  tempEl.className = "mon-value " + (
-    currentMaxTemp >= 40 ? "temp-danger" :
-    currentMaxTemp >= 32 ? "temp-warn" : "temp-ok"
-  );
+  tempEl.className =
+    "mon-value " +
+    (currentMaxTemp >= 40 ? "temp-danger" : currentMaxTemp >= 32 ? "temp-warn" : "temp-ok");
 
   // Cooling Energy
   const baseCooling = coolingEnergyBase[sceneData.id] || 30;
@@ -409,9 +1142,9 @@ function updateMonitorPanel(sceneData: SceneGraph, loadFactor: number, maxHeat: 
 
   // PUE (Power Usage Effectiveness)
   // PUE = (IT Power + Cooling Power) / IT Power
-  const totalServerPower = sceneData.furniture
-    .filter(f => f.heatOutput > 0)
-    .reduce((sum, f) => sum + f.heatOutput, 0) * loadFactor;
+  const totalServerPower =
+    sceneData.furniture.filter((f) => f.heatOutput > 0).reduce((sum, f) => sum + f.heatOutput, 0) *
+    loadFactor;
   const pue = totalServerPower > 0 ? (totalServerPower + currentCooling) / totalServerPower : 1.0;
   const pueEl = document.getElementById("mon-pue")!;
   pueEl.textContent = pue.toFixed(2);
@@ -455,7 +1188,8 @@ function createEquipmentMesh(item: Equipment): THREE.Group {
       // LED 표시등
       if (isActive) {
         const ledGeo = new THREE.BoxGeometry(0.02, 0.02, 0.01);
-        const ledColor = item.heatOutput > 10 ? 0xff1744 : item.heatOutput > 5 ? 0xffab00 : 0x00e676;
+        const ledColor =
+          item.heatOutput > 10 ? 0xff1744 : item.heatOutput > 5 ? 0xffab00 : 0x00e676;
         const ledMat = new THREE.MeshStandardMaterial({
           color: ledColor,
           emissive: ledColor,
@@ -470,7 +1204,7 @@ function createEquipmentMesh(item: Equipment): THREE.Group {
     // 상단 프레임
     const topFrame = new THREE.Mesh(
       new THREE.BoxGeometry(w + 0.02, 0.03, d + 0.02),
-      new THREE.MeshStandardMaterial({ color: 0x212121, metalness: 0.7 })
+      new THREE.MeshStandardMaterial({ color: 0x212121, metalness: 0.7 }),
     );
     topFrame.position.y = h;
     group.add(topFrame);
@@ -490,7 +1224,6 @@ function createEquipmentMesh(item: Equipment): THREE.Group {
       glow.position.y = h + 0.05;
       group.add(glow);
     }
-
   } else if (item.category === "cooling_unit") {
     // 냉각 장치 (CRAC)
     const bodyMat = new THREE.MeshStandardMaterial({
@@ -508,7 +1241,10 @@ function createEquipmentMesh(item: Equipment): THREE.Group {
     // 전면 그릴 (냉각 공기 배출)
     for (let i = 0; i < 6; i++) {
       const grillGeo = new THREE.BoxGeometry(w * 0.8, 0.02, 0.01);
-      const grillMat = new THREE.MeshStandardMaterial({ color: 0x004d40, metalness: 0.5 });
+      const grillMat = new THREE.MeshStandardMaterial({
+        color: 0x004d40,
+        metalness: 0.5,
+      });
       const grill = new THREE.Mesh(grillGeo, grillMat);
       grill.position.set(0, h * 0.3 + i * h * 0.08, d / 2 + 0.01);
       group.add(grill);
@@ -516,7 +1252,10 @@ function createEquipmentMesh(item: Equipment): THREE.Group {
 
     // 상단 팬
     const fanGeo = new THREE.CylinderGeometry(w * 0.3, w * 0.3, 0.05, 24);
-    const fanMat = new THREE.MeshStandardMaterial({ color: 0x004d40, metalness: 0.6 });
+    const fanMat = new THREE.MeshStandardMaterial({
+      color: 0x004d40,
+      metalness: 0.6,
+    });
     const fan = new THREE.Mesh(fanGeo, fanMat);
     fan.position.y = h + 0.025;
     group.add(fan);
@@ -527,14 +1266,13 @@ function createEquipmentMesh(item: Equipment): THREE.Group {
       new THREE.MeshBasicMaterial({
         color: 0x00bcd4,
         transparent: true,
-        opacity: 0.08,
+        opacity: 0.28,
         side: THREE.DoubleSide,
-      })
+      }),
     );
     coolGlow.rotation.x = -Math.PI / 2;
     coolGlow.position.y = 0.005;
     group.add(coolGlow);
-
   } else if (item.category === "network_switch") {
     // 네트워크 스위치/코어 스위치
     const bodyMat = new THREE.MeshStandardMaterial({
@@ -559,11 +1297,7 @@ function createEquipmentMesh(item: Equipment): THREE.Group {
           emissiveIntensity: 0.8,
         });
         const port = new THREE.Mesh(portGeo, portMat);
-        port.position.set(
-          -w * 0.3 + col * w * 0.12,
-          h * 0.4 + row * h * 0.12,
-          d / 2 + 0.011
-        );
+        port.position.set(-w * 0.3 + col * w * 0.12, h * 0.4 + row * h * 0.12, d / 2 + 0.011);
         group.add(port);
       }
     }
@@ -578,7 +1312,6 @@ function createEquipmentMesh(item: Equipment): THREE.Group {
     const label = new THREE.Mesh(labelGeo, labelMat);
     label.position.set(0, h * 0.85, d / 2 + 0.011);
     group.add(label);
-
   } else if (item.category === "ups") {
     // UPS 전원 장치
     const bodyMat = new THREE.MeshStandardMaterial({
@@ -612,7 +1345,6 @@ function createEquipmentMesh(item: Equipment): THREE.Group {
     const batt = new THREE.Mesh(battGeo, battMat);
     batt.position.set(0, h * 0.4, d / 2 + 0.011);
     group.add(batt);
-
   } else if (item.category === "pdu") {
     // PDU 분전반
     const bodyMat = new THREE.MeshStandardMaterial({
@@ -634,7 +1366,6 @@ function createEquipmentMesh(item: Equipment): THREE.Group {
       socket.position.set(0, 0.3 + i * 0.25, d / 2 + 0.011);
       group.add(socket);
     }
-
   } else if (item.category === "monitoring") {
     // 환경 모니터링 장비
     const bodyMat = new THREE.MeshStandardMaterial({
@@ -667,7 +1398,6 @@ function createEquipmentMesh(item: Equipment): THREE.Group {
     const antenna = new THREE.Mesh(antennaGeo, new THREE.MeshStandardMaterial({ color: 0x424242 }));
     antenna.position.set(w * 0.3, h * 0.85 + h * 0.15, 0);
     group.add(antenna);
-
   } else if (item.category === "cable_tray") {
     // 케이블 트레이 (바닥 위 낮은 구조물)
     const trayMat = new THREE.MeshStandardMaterial({
@@ -686,7 +1416,10 @@ function createEquipmentMesh(item: Equipment): THREE.Group {
 
     // 가드레일 양쪽
     const railGeo = new THREE.BoxGeometry(w, 0.08, 0.02);
-    const railMat = new THREE.MeshStandardMaterial({ color: 0xf9a825, metalness: 0.5 });
+    const railMat = new THREE.MeshStandardMaterial({
+      color: 0xf9a825,
+      metalness: 0.5,
+    });
     const rail1 = new THREE.Mesh(railGeo, railMat);
     rail1.position.set(0, 0.19, d / 2);
     group.add(rail1);
@@ -697,16 +1430,21 @@ function createEquipmentMesh(item: Equipment): THREE.Group {
 
     // 케이블 묶음 시뮬레이션
     const cableGeo = new THREE.CylinderGeometry(0.04, 0.04, w * 0.9, 8);
-    const cableMat = new THREE.MeshStandardMaterial({ color: 0x212121, roughness: 0.8 });
+    const cableMat = new THREE.MeshStandardMaterial({
+      color: 0x212121,
+      roughness: 0.8,
+    });
     const cable = new THREE.Mesh(cableGeo, cableMat);
     cable.rotation.z = Math.PI / 2;
     cable.position.y = 0.19;
     group.add(cable);
-
   } else {
     // Fallback
     const geo = new THREE.BoxGeometry(w, h, d);
-    const mat = new THREE.MeshStandardMaterial({ color: item.color, roughness: 0.5 });
+    const mat = new THREE.MeshStandardMaterial({
+      color: item.color,
+      roughness: 0.5,
+    });
     const mesh = new THREE.Mesh(geo, mat);
     mesh.position.y = h / 2;
     group.add(mesh);
@@ -725,10 +1463,15 @@ function createEquipmentMesh(item: Equipment): THREE.Group {
   group.rotation.set(
     THREE.MathUtils.degToRad(item.rotation[0]),
     THREE.MathUtils.degToRad(item.rotation[1]),
-    THREE.MathUtils.degToRad(item.rotation[2])
+    THREE.MathUtils.degToRad(item.rotation[2]),
   );
 
-  group.userData = { id: item.id, label: item.label, category: item.category, heatOutput: item.heatOutput };
+  group.userData = {
+    id: item.id,
+    label: item.label,
+    category: item.category,
+    heatOutput: item.heatOutput,
+  };
   return group;
 }
 
@@ -777,6 +1520,7 @@ function buildScene(sceneData: SceneGraph, withAnimation = true) {
   furnitureGroup.clear();
   buildRoom(sceneData);
   buildHeatmap(sceneData);
+  initAirflow(sceneData);
 
   if (withAnimation) {
     animating = true;
@@ -802,7 +1546,7 @@ function buildScene(sceneData: SceneGraph, withAnimation = true) {
       function animateDrop(now: number) {
         const elapsed = now - startTime;
         const t = Math.min(elapsed / duration, 1);
-        const ease = 1 - Math.pow(1 - t, 3);
+        const ease = 1 - (1 - t) ** 3;
         mesh.position.y = 5 + (targetY - 5) * ease;
         mesh.scale.setScalar(0.01 + 0.99 * ease);
         if (t < 1) requestAnimationFrame(animateDrop);
@@ -833,7 +1577,12 @@ function updateUI(sceneData: SceneGraph) {
 
 function updateScoreBars(score: Score) {
   const metrics: (keyof Score)[] = [
-    "total", "thermal", "cooling", "cable", "proximity", "constraint",
+    "total",
+    "thermal",
+    "cooling",
+    "cable",
+    "proximity",
+    "constraint",
   ];
   for (const key of metrics) {
     const bar = document.getElementById(`bar-${key}`);
@@ -856,14 +1605,9 @@ function updateSceneGraphPanel(sceneData: SceneGraph) {
 
   for (const f of sceneData.furniture) {
     const relStr = f.relations
-      .map(
-        (r) =>
-          `<span class="rel rel-${r.type}">${r.type} &rarr; ${r.target}</span>`
-      )
+      .map((r) => `<span class="rel rel-${r.type}">${r.type} &rarr; ${r.target}</span>`)
       .join("");
-    const heatStr = f.heatOutput > 0
-      ? `<div class="sg-heat">heat: ${f.heatOutput} kW</div>`
-      : "";
+    const heatStr = f.heatOutput > 0 ? `<div class="sg-heat">heat: ${f.heatOutput} kW</div>` : "";
     html += `
       <div class="sg-node">
         <div class="sg-node-header">
@@ -963,8 +1707,12 @@ function drawChart() {
   let legendY = padding.top + 10;
   ctx.font = "10px monospace";
   const labels: Record<string, string> = {
-    total: "Total", thermal: "Thermal", cooling: "Cooling",
-    cable: "Cable", proximity: "Proximity", constraint: "Constraint",
+    total: "Total",
+    thermal: "Thermal",
+    cooling: "Cooling",
+    cable: "Cable",
+    proximity: "Proximity",
+    constraint: "Constraint",
   };
   for (const [key, color] of Object.entries(colors)) {
     ctx.fillStyle = color;
@@ -977,15 +1725,19 @@ function drawChart() {
 }
 
 // ===== Buttons =====
+function updateLegendVisibility() {
+  document.getElementById("airflow-legend")!.style.display = zonesVisible ? "flex" : "none";
+}
+
 function setupButtons() {
-  document.getElementById("btn-prev")!.addEventListener("click", () => {
+  document.getElementById("btn-prev")?.addEventListener("click", () => {
     if (animating || currentSceneIndex === 0) return;
     currentSceneIndex--;
     buildScene(allScenes[currentSceneIndex]);
     updateUI(allScenes[currentSceneIndex]);
   });
 
-  document.getElementById("btn-next")!.addEventListener("click", () => {
+  document.getElementById("btn-next")?.addEventListener("click", () => {
     if (animating || currentSceneIndex === allScenes.length - 1) return;
     currentSceneIndex++;
     buildScene(allScenes[currentSceneIndex]);
@@ -1001,7 +1753,7 @@ function setupButtons() {
     });
   });
 
-  document.getElementById("btn-relations")!.addEventListener("click", () => {
+  document.getElementById("btn-relations")?.addEventListener("click", () => {
     const btn = document.getElementById("btn-relations")!;
     const showing = btn.dataset.showing === "true";
     furnitureGroup.children.forEach((child) => {
@@ -1011,24 +1763,34 @@ function setupButtons() {
     btn.textContent = showing ? "Show Relations" : "Hide Relations";
   });
 
-  document.getElementById("btn-heatmap")!.addEventListener("click", () => {
+  document.getElementById("btn-heatmap")?.addEventListener("click", () => {
     heatmapVisible = !heatmapVisible;
     heatmapGroup.visible = heatmapVisible;
     const btn = document.getElementById("btn-heatmap")!;
     btn.classList.toggle("active-toggle", heatmapVisible);
   });
 
+  document.getElementById("btn-airflow")!.addEventListener("click", () => {
+    airflowVisible = !airflowVisible;
+    airflowGroup.visible = airflowVisible;
+    const btn = document.getElementById("btn-airflow")!;
+    btn.classList.toggle("active-toggle", airflowVisible);
+    updateLegendVisibility();
+  });
+
+  document.getElementById("btn-zones")!.addEventListener("click", () => {
+    zonesVisible = !zonesVisible;
+    zonesGroup.visible = zonesVisible;
+    const btn = document.getElementById("btn-zones")!;
+    btn.classList.toggle("active-toggle", zonesVisible);
+    updateLegendVisibility();
+  });
+
   // Simulation controls
-  document.getElementById("sim-play")!.addEventListener("click", () => {
+  document.getElementById("sim-play")?.addEventListener("click", () => {
     simPlaying = !simPlaying;
     const btn = document.getElementById("sim-play")!;
     btn.innerHTML = simPlaying ? "&#9646;&#9646;" : "&#9654;";
-    // 시뮬레이션 시작 시 히트맵 자동 켜기
-    if (simPlaying && !heatmapVisible) {
-      heatmapVisible = true;
-      heatmapGroup.visible = true;
-      document.getElementById("btn-heatmap")!.classList.add("active-toggle");
-    }
   });
 
   const simSlider = document.getElementById("sim-slider") as HTMLInputElement;
@@ -1038,7 +1800,7 @@ function setupButtons() {
     updateSimulation();
   });
 
-  document.getElementById("sim-speed")!.addEventListener("click", () => {
+  document.getElementById("sim-speed")?.addEventListener("click", () => {
     const speeds = [1, 2, 4, 8];
     const idx = speeds.indexOf(simSpeed);
     simSpeed = speeds[(idx + 1) % speeds.length];
