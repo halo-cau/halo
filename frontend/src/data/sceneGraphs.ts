@@ -9,7 +9,13 @@ export interface Opening {
 }
 
 export interface Relation {
-  type: "cooling_serves" | "cable_connected" | "hot_aisle" | "cold_aisle" | "adjacent_to" | "grouped_with";
+  type:
+    | "cooling_serves"
+    | "cable_connected"
+    | "hot_aisle"
+    | "cold_aisle"
+    | "adjacent_to"
+    | "grouped_with";
   target: string;
 }
 
@@ -27,11 +33,11 @@ export interface Equipment {
 
 export interface Score {
   total: number;
-  thermal: number;     // 열 균등 분포
-  cooling: number;     // 냉각 효율
-  cable: number;       // 케이블 길이 최소화
-  proximity: number;   // 메인 서버 근접성
-  constraint: number;  // 제약 조건 충족
+  thermal: number; // 열 균등 분포
+  cooling: number; // 냉각 효율
+  cable: number; // 케이블 길이 최소화
+  proximity: number; // 메인 서버 근접성
+  constraint: number; // 제약 조건 충족
 }
 
 export interface SceneGraph {
@@ -52,10 +58,30 @@ const SERVER_ROOM = {
   type: "server_room",
   dimensions: [12, 3.5, 9] as [number, number, number],
   openings: [
-    { type: "door" as const, wall: "south" as const, position: [6, 0, 9] as [number, number, number], width: 1.8 },
-    { type: "vent" as const, wall: "north" as const, position: [3, 2.8, 0] as [number, number, number], width: 2.0 },
-    { type: "vent" as const, wall: "north" as const, position: [9, 2.8, 0] as [number, number, number], width: 2.0 },
-    { type: "vent" as const, wall: "east" as const, position: [12, 2.8, 4.5] as [number, number, number], width: 1.5 },
+    {
+      type: "door" as const,
+      wall: "south" as const,
+      position: [6, 0, 9] as [number, number, number],
+      width: 1.8,
+    },
+    {
+      type: "vent" as const,
+      wall: "north" as const,
+      position: [3, 2.8, 0] as [number, number, number],
+      width: 2.0,
+    },
+    {
+      type: "vent" as const,
+      wall: "north" as const,
+      position: [9, 2.8, 0] as [number, number, number],
+      width: 2.0,
+    },
+    {
+      type: "vent" as const,
+      wall: "east" as const,
+      position: [12, 2.8, 4.5] as [number, number, number],
+      width: 1.5,
+    },
   ],
 };
 
@@ -63,8 +89,7 @@ const SERVER_ROOM = {
 export const randomPlacement: SceneGraph = {
   id: "random_v1",
   name: "무작위 배치",
-  description:
-    "서버 랙이 무작위로 흩어져 핫스팟 발생, 냉각 효율 극저. 케이블 경로 비효율적.",
+  description: "서버 랙이 무작위로 흩어져 핫스팟 발생, 냉각 효율 극저. 케이블 경로 비효율적.",
   room: SERVER_ROOM,
   furniture: [
     {
@@ -205,7 +230,7 @@ export const randomPlacement: SceneGraph = {
     thermal: 0.08,
     cooling: 0.12,
     cable: 0.18,
-    proximity: 0.20,
+    proximity: 0.2,
     constraint: 0.25,
   },
 };
@@ -363,7 +388,7 @@ export const ruleBasedPlacement: SceneGraph = {
   score: {
     total: 0.48,
     thermal: 0.42,
-    cooling: 0.50,
+    cooling: 0.5,
     cable: 0.55,
     proximity: 0.52,
     constraint: 0.65,
@@ -502,9 +527,7 @@ export const rlOptimizedPlacement: SceneGraph = {
       size: [0.8, 2.0, 0.6],
       color: "#00ACC1",
       heatOutput: 0,
-      relations: [
-        { type: "cooling_serves", target: "rack_03" },
-      ],
+      relations: [{ type: "cooling_serves", target: "rack_03" }],
     },
     {
       id: "ups_01",
@@ -554,9 +577,7 @@ export const rlOptimizedPlacement: SceneGraph = {
       size: [4.5, 0.1, 0.4],
       color: "#FDD835",
       heatOutput: 0,
-      relations: [
-        { type: "cable_connected", target: "core_switch" },
-      ],
+      relations: [{ type: "cable_connected", target: "core_switch" }],
     },
     {
       id: "cable_tray_02",
@@ -567,9 +588,7 @@ export const rlOptimizedPlacement: SceneGraph = {
       size: [4.5, 0.1, 0.4],
       color: "#F9A825",
       heatOutput: 0,
-      relations: [
-        { type: "cable_connected", target: "cable_tray_01" },
-      ],
+      relations: [{ type: "cable_connected", target: "cable_tray_01" }],
     },
   ],
   score: {
@@ -577,7 +596,7 @@ export const rlOptimizedPlacement: SceneGraph = {
     thermal: 0.94,
     cooling: 0.92,
     cable: 0.88,
-    proximity: 0.90,
+    proximity: 0.9,
     constraint: 0.95,
   },
 };
@@ -586,32 +605,28 @@ export const rlOptimizedPlacement: SceneGraph = {
 export const trainingHistory = {
   episodes: [0, 100, 200, 400, 600, 800, 1000, 1500, 2000, 3000, 5000, 8000, 10000],
   scores: {
-    total:      [0.15, 0.22, 0.30, 0.40, 0.50, 0.60, 0.68, 0.76, 0.82, 0.87, 0.90, 0.91, 0.91],
-    thermal:    [0.08, 0.15, 0.24, 0.35, 0.48, 0.60, 0.70, 0.80, 0.87, 0.92, 0.94, 0.94, 0.94],
-    cooling:    [0.12, 0.20, 0.30, 0.42, 0.54, 0.64, 0.72, 0.82, 0.88, 0.91, 0.92, 0.92, 0.92],
-    cable:      [0.18, 0.24, 0.32, 0.42, 0.50, 0.58, 0.65, 0.73, 0.80, 0.85, 0.88, 0.88, 0.88],
-    proximity:  [0.20, 0.26, 0.33, 0.42, 0.52, 0.60, 0.68, 0.76, 0.82, 0.87, 0.90, 0.90, 0.90],
+    total: [0.15, 0.22, 0.3, 0.4, 0.5, 0.6, 0.68, 0.76, 0.82, 0.87, 0.9, 0.91, 0.91],
+    thermal: [0.08, 0.15, 0.24, 0.35, 0.48, 0.6, 0.7, 0.8, 0.87, 0.92, 0.94, 0.94, 0.94],
+    cooling: [0.12, 0.2, 0.3, 0.42, 0.54, 0.64, 0.72, 0.82, 0.88, 0.91, 0.92, 0.92, 0.92],
+    cable: [0.18, 0.24, 0.32, 0.42, 0.5, 0.58, 0.65, 0.73, 0.8, 0.85, 0.88, 0.88, 0.88],
+    proximity: [0.2, 0.26, 0.33, 0.42, 0.52, 0.6, 0.68, 0.76, 0.82, 0.87, 0.9, 0.9, 0.9],
     constraint: [0.25, 0.34, 0.44, 0.55, 0.65, 0.74, 0.82, 0.88, 0.92, 0.95, 0.95, 0.95, 0.95],
   },
 };
 
-export const allScenes: SceneGraph[] = [
-  randomPlacement,
-  ruleBasedPlacement,
-  rlOptimizedPlacement,
-];
+export const allScenes: SceneGraph[] = [randomPlacement, ruleBasedPlacement, rlOptimizedPlacement];
 
 // ===== 시간대별 서버 부하 프로파일 (24시간) =====
 // 각 시간(0~23)에 대한 부하 계수 (0.0 ~ 1.0)
 export const loadProfile: number[] = [
   // 0h    1h    2h    3h    4h    5h
-  0.15, 0.12, 0.10, 0.10, 0.12, 0.18,
+  0.15, 0.12, 0.1, 0.1, 0.12, 0.18,
   // 6h    7h    8h    9h   10h   11h
-  0.30, 0.50, 0.70, 0.82, 0.88, 0.92,
+  0.3, 0.5, 0.7, 0.82, 0.88, 0.92,
   // 12h  13h   14h   15h   16h   17h
-  0.95, 1.00, 0.98, 0.93, 0.88, 0.82,
+  0.95, 1.0, 0.98, 0.93, 0.88, 0.82,
   // 18h  19h   20h   21h   22h   23h
-  0.72, 0.60, 0.45, 0.35, 0.25, 0.18,
+  0.72, 0.6, 0.45, 0.35, 0.25, 0.18,
 ];
 
 // 시간대별 보간된 부하 계수 (분 단위 부드러운 전환)
@@ -625,14 +640,14 @@ export function getLoadFactor(hour: number): number {
 // 배치별 peak time 냉각 에너지 (kW) — 배치 품질에 따라 다름
 // random: 비효율적 → 냉각 에너지 높음, RL: 효율적 → 냉각 에너지 낮음
 export const coolingEnergyBase: Record<string, number> = {
-  random_v1: 42,   // kW (비효율)
-  rule_v1: 30,     // kW (중간)
-  rl_ppo_v1: 18,   // kW (효율적, ~40% 절감)
+  random_v1: 42, // kW (비효율)
+  rule_v1: 30, // kW (중간)
+  rl_ppo_v1: 18, // kW (효율적, ~40% 절감)
 };
 
 // 배치별 peak time 최고 온도 (°C)
 export const peakTempBase: Record<string, number> = {
-  random_v1: 48,   // 핫스팟 심각
-  rule_v1: 38,     // 개선되었지만 미흡
-  rl_ppo_v1: 29,   // 균등 분포
+  random_v1: 48, // 핫스팟 심각
+  rule_v1: 38, // 개선되었지만 미흡
+  rl_ppo_v1: 29, // 균등 분포
 };
