@@ -49,6 +49,9 @@ HEAT_SIGMA: float = 2.0
 # --- Semantic Stamp Radius (AC vents, workspaces) ---
 STAMP_RADIUS_VOXELS: int = 3
 
+# --- Workspace (desk) dimensions in metres ---
+WORKSPACE_DIMENSIONS: tuple[float, float, float] = (1.2, 0.6, 0.75)  # width, depth, height
+
 # --- ASHRAE Standard Rack Dimensions (metres) ---
 # Based on EIA-310 / ASHRAE TC 9.9 standard 19" server racks.
 # Each rack type is (width, depth, height).

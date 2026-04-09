@@ -25,6 +25,7 @@ from engine.core.config import (
     SPACE_EMPTY,
     STAMP_RADIUS_VOXELS,
     VOXEL_SIZE,
+    WORKSPACE_DIMENSIONS,
 )
 from engine.core.data_types import RackFacing, RackPlacement, ScanMetadata
 from engine.core.exceptions import MeshProcessingError, RoomTooLargeError
@@ -112,6 +113,33 @@ def _stamp_sphere(
                     grid[x, y, z] = label
 
 
+def _stamp_box(
+    grid: np.ndarray,
+    cx: int,
+    cy: int,
+    cz: int,
+    label: int,
+    dims_m: tuple[float, float, float],
+) -> None:
+    """Stamp a solid axis-aligned box of *label* centred at (cx, cy) on the floor (cz).
+
+    dims_m is (width_x, depth_y, height_z) in metres.
+    """
+    vw = max(1, round(dims_m[0] / VOXEL_SIZE))
+    vd = max(1, round(dims_m[1] / VOXEL_SIZE))
+    vh = max(1, round(dims_m[2] / VOXEL_SIZE))
+    sx, sy, sz = grid.shape
+    x0 = max(cx - vw // 2, 0)
+    x1 = min(x0 + vw, sx)
+    y0 = max(cy - vd // 2, 0)
+    y1 = min(y0 + vd, sy)
+    z0 = max(cz, 0)
+    z1 = min(cz + vh, sz)
+    if x0 >= x1 or y0 >= y1 or z0 >= z1:
+        return
+    grid[x0:x1, y0:y1, z0:z1] = label
+
+
 def _inject_heat(
     grid: np.ndarray,
     cx: int,
@@ -157,7 +185,7 @@ def fuse_semantics(
 
     for ws in metadata.human_workspaces:
         ix, iy, iz = _world_to_index(ws.x, ws.y, ws.z, origin)
-        _stamp_sphere(grid, ix, iy, iz, HUMAN_WORKSPACE)
+        _stamp_box(grid, ix, iy, iz, HUMAN_WORKSPACE, WORKSPACE_DIMENSIONS)
 
     for server in metadata.legacy_servers:
         ix, iy, iz = _world_to_index(server.x, server.y, server.z, origin)

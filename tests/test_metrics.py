@@ -131,8 +131,11 @@ class TestComputeMetrics:
         assert len(mr.room.vertical_profile) == grid.shape[2]
 
     def test_vertical_profile_increases_upward(self):
-        """Due to buoyancy, upper layers should generally be warmer."""
-        grid, origin, temp, racks, cus = self._setup_room_with_rack()
+        """Due to buoyancy, upper layers should generally be warmer
+        when there is no forced downward airflow from AC units."""
+        grid, origin, temp, racks, cus = self._setup_room_with_rack(
+            power_kw=10.0, airflow_cfm=600.0, add_ac=False,
+        )
         mr = compute_metrics(grid, temp, racks, origin, cus)
         profile = mr.room.vertical_profile
         # Compare bottom quarter mean vs top quarter mean

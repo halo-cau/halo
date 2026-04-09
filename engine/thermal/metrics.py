@@ -30,13 +30,14 @@ from engine.core.config import (
     CFM_TO_M3_S,
     AIR_DENSITY_KG_M3,
     AIR_CP_J_KG_K,
+    RACK_DIMENSIONS,
     RACK_EXHAUST,
     RACK_INTAKE,
     SPACE_EMPTY,
     COOLING_AC_VENT,
     VOXEL_SIZE,
 )
-from engine.core.data_types import CoolingUnit, RackPlacement
+from engine.core.data_types import CoolingUnit, RackFacing, RackPlacement
 
 # ── Result containers ─────────────────────────────────────
 
@@ -73,6 +74,69 @@ class MetricsResult:
 
 # ── Public API ────────────────────────────────────────────
 
+def _world_to_index(
+    x: float, y: float, z: float, origin: np.ndarray,
+) -> tuple[int, int, int]:
+    """Convert world coordinates to voxel indices."""
+    idx = np.floor((np.array([x, y, z]) - origin) / VOXEL_SIZE).astype(int)
+    return int(idx[0]), int(idx[1]), int(idx[2])
+
+
+def _rack_bbox(
+    rack: RackPlacement, origin: np.ndarray, grid_shape: tuple[int, ...],
+) -> tuple[int, int, int, int, int, int]:
+    """Return clamped (x0, x1, y0, y1, z0, z1) for a rack's full volume."""
+    dims = RACK_DIMENSIONS.get(rack.rack_type)
+    if dims is None:
+        return (0, 0, 0, 0, 0, 0)
+    rack_w, rack_d, rack_h = dims
+    vw = max(1, round(rack_w / VOXEL_SIZE))
+    vd = max(1, round(rack_d / VOXEL_SIZE))
+    vh = max(1, round(rack_h / VOXEL_SIZE))
+
+    cx, cy, cz = _world_to_index(rack.position.x, rack.position.y, rack.position.z, origin)
+    half_w = vw // 2
+    facing = rack.facing
+
+    if facing == RackFacing.PLUS_X:
+        x0, x1 = cx - vd + 1, cx + 1
+        y0, y1 = cy - half_w, cy - half_w + vw
+    elif facing == RackFacing.MINUS_X:
+        x0, x1 = cx, cx + vd
+        y0, y1 = cy - half_w, cy - half_w + vw
+    elif facing == RackFacing.PLUS_Y:
+        x0, x1 = cx - half_w, cx - half_w + vw
+        y0, y1 = cy - vd + 1, cy + 1
+    elif facing == RackFacing.MINUS_Y:
+        x0, x1 = cx - half_w, cx - half_w + vw
+        y0, y1 = cy, cy + vd
+    else:
+        return (0, 0, 0, 0, 0, 0)
+
+    z0, z1 = cz, cz + vh
+    sx, sy, sz = grid_shape
+    return (max(x0, 0), min(x1, sx), max(y0, 0), min(y1, sy), max(z0, 0), min(z1, sz))
+
+
+def _sample_rack_temps(
+    grid: np.ndarray,
+    temp: np.ndarray,
+    rack: RackPlacement,
+    origin: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return (intake_temps, exhaust_temps) arrays for a single rack."""
+    x0, x1, y0, y1, z0, z1 = _rack_bbox(rack, origin, grid.shape)
+    if x0 >= x1 or y0 >= y1 or z0 >= z1:
+        return np.array([]), np.array([])
+
+    sub_grid = grid[x0:x1, y0:y1, z0:z1]
+    sub_temp = temp[x0:x1, y0:y1, z0:z1]
+
+    i_mask = sub_grid == RACK_INTAKE
+    e_mask = sub_grid == RACK_EXHAUST
+    return sub_temp[i_mask], sub_temp[e_mask]
+
+
 def compute_metrics(
     grid: np.ndarray,
     temp: np.ndarray,
@@ -99,19 +163,13 @@ def compute_metrics(
     allow_lo, allow_hi = ASHRAE_INLET_ALLOWABLE_RANGE  # (15, 35)
 
     # --- Per-rack metrics ----
-    intake_mask = grid == RACK_INTAKE
-    exhaust_mask = grid == RACK_EXHAUST
-
     rack_metrics: list[RackMetrics] = []
     all_intake_temps: list[float] = []
     all_exhaust_temps: list[float] = []
 
     for idx, rack in enumerate(racks):
-        # For now we treat *all* intake/exhaust voxels as belonging to
-        # every rack (single-rack demo).  A future improvement would
-        # associate voxels to individual racks by proximity.
-        i_temps = temp[intake_mask]
-        e_temps = temp[exhaust_mask]
+        # Find this rack's intake/exhaust voxels by bounding box
+        i_temps, e_temps = _sample_rack_temps(grid, temp, rack, origin)
 
         i_mean = float(i_temps.mean()) if len(i_temps) > 0 else float(temp.mean())
         e_mean = float(e_temps.mean()) if len(e_temps) > 0 else i_mean

@@ -57,7 +57,7 @@ def _align_floor_to_z0(
 
 
 def clean_and_align(obj_path: Path) -> Path:
-    """Load an .obj mesh, run SOR + RANSAC floor alignment, return cleaned PLY path.
+    """Load a mesh (OBJ or PLY), run SOR + RANSAC floor alignment, return cleaned PLY path.
 
     The returned path is a temporary .ply file consumable by Trimesh.
     The caller is responsible for deleting it when done.
@@ -75,14 +75,14 @@ def clean_and_align(obj_path: Path) -> Path:
 def clean_and_align_meshes(
     obj_path: Path,
 ) -> tuple[o3d.geometry.TriangleMesh, o3d.geometry.TriangleMesh]:
-    """Load an .obj mesh, return (raw_mesh, cleaned_aligned_mesh).
+    """Load a mesh (OBJ or PLY), return (raw_mesh, cleaned_aligned_mesh).
 
     Both are Open3D TriangleMesh objects with computed vertex normals.
     The raw mesh is the original geometry before any processing.
     """
     mesh = o3d.io.read_triangle_mesh(str(obj_path))
     if mesh.is_empty():
-        raise MeshProcessingError("The uploaded .obj file contains no geometry.")
+        raise MeshProcessingError("The uploaded mesh file contains no geometry.")
 
     mesh.compute_vertex_normals()
     raw_mesh = o3d.geometry.TriangleMesh(mesh)  # deep copy before cleanup

@@ -5,6 +5,7 @@ import json
 import os
 import tempfile
 import uuid
+from pathlib import Path
 
 import numpy as np
 import open3d as o3d
@@ -12,10 +13,10 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 from pydantic import ValidationError
 
 from app.core.config import MAX_UPLOAD_SIZE_BYTES, TEMP_SCAN_DIR
-from app.core.exceptions import InvalidFileTypeError, MeshTooLargeError
+from app.core.exceptions import ALLOWED_SCAN_EXTENSIONS, InvalidFileTypeError, MeshTooLargeError
 from app.schemas.payload import ScanMetadataSchema
-from app.schemas.visualize import MetricsData, RackMetricsData, RoomMetricsData, ThermalData, VisualizeResponse, VoxelData
-from engine.core.config import VOXEL_SIZE
+from app.schemas.visualize import EquipmentItem, MetricsData, RackMetricsData, RoomMetricsData, ThermalData, VisualizeResponse, VoxelData
+from engine.core.config import ASHRAE_RECOMMENDED_INLET, RACK_DIMENSIONS, VOXEL_SIZE
 from engine.core.data_types import (
     Coordinate,
     CoolingUnit,
@@ -31,6 +32,78 @@ from engine.vision.exporter import o3d_to_glb, paint_semantic_colors
 from engine.vision.voxelizer import voxelize_and_label
 
 router = APIRouter()
+
+
+def _build_equipment_list(metadata: ScanMetadata) -> list[EquipmentItem]:
+    """Convert engine metadata into frontend-friendly equipment descriptors.
+
+    Positions are centre-bottom in Z-up world coords.
+    """
+    items: list[EquipmentItem] = []
+
+    # Racks
+    for i, rack in enumerate(metadata.racks):
+        w, d, h = RACK_DIMENSIONS.get(rack.rack_type, (0.6, 1.0, 2.0))
+        # Shift from front-bottom-centre to body-centre-bottom
+        cx, cy, cz = rack.position.x, rack.position.y, rack.position.z
+        facing = rack.facing.value  # "+x", "-x", "+y", "-y"
+        if facing == "+x":
+            cx -= d / 2
+        elif facing == "-x":
+            cx += d / 2
+        elif facing == "+y":
+            cy -= d / 2
+        elif facing == "-y":
+            cy += d / 2
+
+        items.append(EquipmentItem(
+            id=f"rack_{i:02d}",
+            category="server_rack",
+            label=f"Rack {i + 1}",
+            position=[cx, cy, cz],
+            size=[w, d, h],
+            color="#37474F",
+            heat_output=rack.power_kw,
+            facing=facing,
+        ))
+
+    # Cooling units
+    for i, cu in enumerate(metadata.cooling_units):
+        items.append(EquipmentItem(
+            id=f"crac_{i:02d}",
+            category="cooling_unit",
+            label=f"CRAC {i + 1}",
+            position=[cu.position.x, cu.position.y, cu.position.z],
+            size=[0.6, 0.6, 1.5],
+            color="#004d40",
+            heat_output=0.0,
+        ))
+
+    # Workspaces (desk boxes)
+    for i, ws in enumerate(metadata.human_workspaces):
+        items.append(EquipmentItem(
+            id=f"desk_{i:02d}",
+            category="workspace",
+            label=f"Desk {i + 1}",
+            position=[ws.x, ws.y, ws.z],
+            size=[1.2, 0.6, 0.75],
+            color="#3e2723",
+            heat_output=0.0,
+        ))
+
+    # Legacy servers
+    for i, ls in enumerate(metadata.legacy_servers):
+        items.append(EquipmentItem(
+            id=f"legacy_{i:02d}",
+            category="legacy_server",
+            label=f"Legacy {i + 1}",
+            position=[ls.x, ls.y, ls.z],
+            size=[0.4, 0.4, 0.8],
+            color="#ff9800",
+            heat_output=0.5,
+        ))
+
+    return items
 
 
 def _voxelize_mesh(
@@ -74,10 +147,22 @@ def _compute_thermal(
     if not racks:
         return None, None
     temp = compute_thermal_field(grid, racks, origin, cooling_units=cooling_units)
-    # Return temperatures only at non-empty voxel positions
-    nz = np.argwhere(grid != 0)
+
+    # Include voxels whose temperature deviates noticeably from ambient.
+    ambient = ASHRAE_RECOMMENDED_INLET
+    threshold = 1.0  # °C deviation to include
+    interesting = np.abs(temp - ambient) > threshold
+    nz = np.argwhere(interesting)
     if len(nz) == 0:
         return None, None
+
+    # Spatial down-sample on X/Y only (keep full Z height resolution)
+    # to reduce instance count ~4× while preserving vertical detail.
+    keep = (nz[:, 0] % 2 == 0) & (nz[:, 1] % 2 == 0)
+    nz = nz[keep]
+    if len(nz) == 0:
+        return None, None
+
     temps = temp[nz[:, 0], nz[:, 1], nz[:, 2]].tolist()
     thermal = ThermalData(
         positions=nz.tolist(),
@@ -123,7 +208,7 @@ async def visualize(
 
     # --- Validate file extension ---
     filename = file.filename or ""
-    if not filename.lower().endswith(".obj"):
+    if not filename.lower().endswith(ALLOWED_SCAN_EXTENSIONS):
         raise InvalidFileTypeError(filename)
 
     # --- Validate file size ---
@@ -143,20 +228,21 @@ async def visualize(
 
     # --- Save temp .obj ---
     TEMP_SCAN_DIR.mkdir(parents=True, exist_ok=True)
-    obj_path = TEMP_SCAN_DIR / f"{uuid.uuid4()}.obj"
+    ext = Path(filename).suffix.lower()
+    scan_path = TEMP_SCAN_DIR / f"{uuid.uuid4()}{ext}"
     try:
-        obj_path.write_bytes(contents)
+        scan_path.write_bytes(contents)
 
         # --- Run cleaner to get both meshes ---
-        raw_mesh, cleaned_mesh = clean_and_align_meshes(obj_path)
+        raw_mesh, cleaned_mesh = clean_and_align_meshes(scan_path)
     except EngineError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(exc),
         ) from exc
     finally:
-        if obj_path.exists():
-            os.unlink(obj_path)
+        if scan_path.exists():
+            os.unlink(scan_path)
 
     # --- Convert to GLB ---
     raw_glb = base64.b64encode(o3d_to_glb(raw_mesh)).decode("ascii")
@@ -186,6 +272,7 @@ async def visualize(
         voxel_grid=voxel_grid,
         thermal=thermal,
         metrics=metrics,
+        equipment=_build_equipment_list(engine_metadata) or None,
     )
 
 
@@ -193,8 +280,8 @@ async def visualize(
 async def visualize_demo() -> VisualizeResponse:
     """Generate a demo room mesh on-the-fly — no upload required."""
 
-    # Build a simple box room mesh (4×3×2.5 m)
-    mesh = o3d.geometry.TriangleMesh.create_box(4.0, 3.0, 2.5)
+    # Build a simple box room mesh (12×10×2.5 m)
+    mesh = o3d.geometry.TriangleMesh.create_box(12.0, 10.0, 2.5)
     mesh.compute_vertex_normals()
     mesh = mesh.subdivide_midpoint(number_of_iterations=3)
 
@@ -212,41 +299,60 @@ async def visualize_demo() -> VisualizeResponse:
     cleaned_glb = base64.b64encode(o3d_to_glb(cleaned_mesh)).decode("ascii")
 
     # Demo metadata — realistic server room layout:
-    #   Room: 4 m (X) × 3 m (Y) × 2.5 m (Z)
-    #   Y ≈ 0 wall: full row of human workstations (desks at floor level)
-    #   Y ≈ 3 wall: ASHRAE racks facing +Y (intake toward aisle, exhaust toward wall)
-    #   Ceiling: AC vents spread across the room
+    #   Room: 12 m (X) × 10 m (Y) × 2.5 m (Z)
+    #   Racks shifted right (X≈5–11) to leave workspace area on the left
+    #   Two rows of racks forming hot-aisle / cold-aisle with ~4 m gap
+    #   Row A (Y≈3.0) exhausts toward +Y, Row B (Y≈7.0) exhausts toward −Y
+    #   Hot aisle between Y≈4.0 and Y≈6.0
+    #   Workspaces (desks) along left wall X≈1.0
+    #   Legacy server in far corner
     demo_metadata = ScanMetadata(
         human_workspaces=[
-            Coordinate(0.5, 0.3, 0.0),
-            Coordinate(1.0, 0.3, 0.0),
-            Coordinate(1.5, 0.3, 0.0),
-            Coordinate(2.0, 0.3, 0.0),
-            Coordinate(2.5, 0.3, 0.0),
-            Coordinate(3.0, 0.3, 0.0),
-            Coordinate(3.5, 0.3, 0.0),
+            # Workspaces (desks) along left wall, spaced along Y
+            Coordinate(1.0, 1.5, 0.0),
+            Coordinate(1.0, 3.0, 0.0),
+            Coordinate(1.0, 4.5, 0.0),
+            Coordinate(1.0, 6.0, 0.0),
+            Coordinate(1.0, 7.5, 0.0),
+            Coordinate(1.0, 9.0, 0.0),
         ],
-        legacy_servers=[],
+        legacy_servers=[
+            # Old tower server in the far corner
+            Coordinate(11.0, 0.5, 0.0),
+        ],
         cooling_units=[
-            # Two ceiling CRAC diffusers blowing straight down
-            CoolingUnit(Coordinate(1.0, 1.0, 2.4), capacity_kw=12.0,
+            # Ceiling CRAC diffusers — spread across rack area
+            CoolingUnit(Coordinate(6.0, 2.0, 2.4), capacity_kw=12.0,
                         supply_direction=(0, 0, -1), supply_temp_c=14.0, airflow_cfm=2000.0),
-            CoolingUnit(Coordinate(3.0, 1.0, 2.4), capacity_kw=12.0,
+            CoolingUnit(Coordinate(10.0, 2.0, 2.4), capacity_kw=12.0,
                         supply_direction=(0, 0, -1), supply_temp_c=14.0, airflow_cfm=2000.0),
-            # Wall-mounted split unit, louvers angled 45° downward into room
-            CoolingUnit(Coordinate(2.0, 2.8, 2.0), capacity_kw=8.0,
+            CoolingUnit(Coordinate(6.0, 8.0, 2.4), capacity_kw=12.0,
+                        supply_direction=(0, 0, -1), supply_temp_c=14.0, airflow_cfm=2000.0),
+            CoolingUnit(Coordinate(10.0, 8.0, 2.4), capacity_kw=12.0,
+                        supply_direction=(0, 0, -1), supply_temp_c=14.0, airflow_cfm=2000.0),
+            # Wall-mounted split unit on Y=10 wall
+            CoolingUnit(Coordinate(8.0, 9.8, 2.0), capacity_kw=8.0,
                         supply_direction=(0, -1, -1), supply_temp_c=16.0, airflow_cfm=1200.0),
         ],
         racks=[
-            # Mixed 1U servers — moderate airflow
-            RackPlacement(Coordinate(1.0, 2.0, 0.0), RackFacing.PLUS_Y,
+            # --- Row A (Y≈3.0): intake facing −Y (cold aisle), exhaust toward +Y (hot aisle) ---
+            RackPlacement(Coordinate(5.0, 3.0, 0.0), RackFacing.MINUS_Y,
                           power_kw=5.0, airflow_cfm=800.0),
-            # Dense blade chassis — high power, lower airflow → hotter exhaust
-            RackPlacement(Coordinate(2.0, 2.0, 0.0), RackFacing.PLUS_Y,
-                          power_kw=8.0, airflow_cfm=500.0),
-            # Mixed 1U servers
-            RackPlacement(Coordinate(3.0, 2.0, 0.0), RackFacing.PLUS_Y,
+            RackPlacement(Coordinate(7.0, 3.0, 0.0), RackFacing.MINUS_Y,
+                          power_kw=8.0, airflow_cfm=500.0),   # dense blade chassis
+            RackPlacement(Coordinate(9.0, 3.0, 0.0), RackFacing.MINUS_Y,
                           power_kw=5.0, airflow_cfm=800.0),
+            RackPlacement(Coordinate(11.0, 3.0, 0.0), RackFacing.MINUS_Y,
+                          power_kw=6.0, airflow_cfm=700.0),
+            # --- Row B (Y≈7.0): intake facing +Y (cold aisle), exhaust toward −Y (hot aisle) ---
+            RackPlacement(Coordinate(5.0, 7.0, 0.0), RackFacing.PLUS_Y,
+                          power_kw=5.0, airflow_cfm=800.0),
+            RackPlacement(Coordinate(7.0, 7.0, 0.0), RackFacing.PLUS_Y,
+                          power_kw=7.0, airflow_cfm=600.0),
+            RackPlacement(Coordinate(9.0, 7.0, 0.0), RackFacing.PLUS_Y,
+                          power_kw=5.0, airflow_cfm=800.0),
+            RackPlacement(Coordinate(11.0, 7.0, 0.0), RackFacing.PLUS_Y,
+                          power_kw=4.0, airflow_cfm=900.0),   # lightly loaded
         ],
     )
     colored_mesh = paint_semantic_colors(cleaned_mesh, demo_metadata)
@@ -265,4 +371,5 @@ async def visualize_demo() -> VisualizeResponse:
         voxel_grid=voxel_grid,
         thermal=thermal,
         metrics=metrics,
+        equipment=_build_equipment_list(demo_metadata) or None,
     )

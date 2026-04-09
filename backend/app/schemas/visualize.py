@@ -51,6 +51,18 @@ class MetricsData(BaseModel):
     room: RoomMetricsData
 
 
+class EquipmentItem(BaseModel):
+    """Equipment descriptor for 3D styled rendering in the frontend."""
+    id: str
+    category: str  # "server_rack", "cooling_unit", "workspace"
+    label: str
+    position: list[float]  # [x, y, z] center-bottom, Z-up coords
+    size: list[float]  # [width, depth, height] in metres
+    color: str  # hex color string, e.g. "#37474F"
+    heat_output: float  # kW (0 for non-heat-sources)
+    facing: str | None = None  # "+x", "-x", "+y", "-y" for racks
+
+
 class VisualizeResponse(BaseModel):
     raw_glb: str  # base64-encoded GLB (before cleanup)
     cleaned_glb: str  # base64-encoded GLB (after SOR + floor alignment)
@@ -58,3 +70,4 @@ class VisualizeResponse(BaseModel):
     voxel_grid: VoxelData | None = None  # compact voxel grid for 3D rendering
     thermal: ThermalData | None = None  # thermal field for heat-map rendering
     metrics: MetricsData | None = None  # ASHRAE compliance metrics
+    equipment: list[EquipmentItem] | None = None  # styled equipment for 3D rendering
