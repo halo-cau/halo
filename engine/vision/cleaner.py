@@ -57,16 +57,35 @@ def _align_floor_to_z0(
 
 
 def clean_and_align(obj_path: Path) -> Path:
-    """Load an .obj mesh, run SOR + RANSAC floor alignment, return cleaned PLY path.
+    """Load a mesh (OBJ or PLY), run SOR + RANSAC floor alignment, return cleaned PLY path.
 
     The returned path is a temporary .ply file consumable by Trimesh.
     The caller is responsible for deleting it when done.
     """
+    _, cleaned = clean_and_align_meshes(obj_path)
+
+    # --- Export to a temp PLY for Trimesh ---
+    tmp = tempfile.NamedTemporaryFile(suffix=".ply", delete=False)
+    tmp.close()
+    o3d.io.write_triangle_mesh(tmp.name, cleaned)
+
+    return Path(tmp.name)
+
+
+def clean_and_align_meshes(
+    obj_path: Path,
+) -> tuple[o3d.geometry.TriangleMesh, o3d.geometry.TriangleMesh]:
+    """Load a mesh (OBJ or PLY), return (raw_mesh, cleaned_aligned_mesh).
+
+    Both are Open3D TriangleMesh objects with computed vertex normals.
+    The raw mesh is the original geometry before any processing.
+    """
     mesh = o3d.io.read_triangle_mesh(str(obj_path))
     if mesh.is_empty():
-        raise MeshProcessingError("The uploaded .obj file contains no geometry.")
+        raise MeshProcessingError("The uploaded mesh file contains no geometry.")
 
     mesh.compute_vertex_normals()
+    raw_mesh = o3d.geometry.TriangleMesh(mesh)  # deep copy before cleanup
 
     # --- Statistical Outlier Removal on the vertex cloud ---
     pcd = o3d.geometry.PointCloud()
@@ -87,24 +106,48 @@ def clean_and_align(obj_path: Path) -> Path:
     mesh.compute_vertex_normals()
 
     # --- RANSAC floor detection ---
+    # segment_plane finds the largest plane, which may be a wall.
+    # Iterate to find the most floor-like plane (normal closest to ±Z).
     pcd_clean = o3d.geometry.PointCloud()
     pcd_clean.points = mesh.vertices
     pcd_clean.normals = mesh.vertex_normals
 
-    plane_model, _ = pcd_clean.segment_plane(
-        distance_threshold=RANSAC_DISTANCE_THRESHOLD,
-        ransac_n=RANSAC_NUM_POINTS,
-        num_iterations=RANSAC_NUM_ITERATIONS,
-    )
+    best_plane = None
+    best_z_component = 0.0
+    remaining = pcd_clean
+    max_attempts = 5
 
-    if plane_model is None:
+    for _ in range(max_attempts):
+        if len(remaining.points) < RANSAC_NUM_POINTS:
+            break
+
+        plane_model, inlier_idx = remaining.segment_plane(
+            distance_threshold=RANSAC_DISTANCE_THRESHOLD,
+            ransac_n=RANSAC_NUM_POINTS,
+            num_iterations=RANSAC_NUM_ITERATIONS,
+        )
+
+        if plane_model is None or len(inlier_idx) == 0:
+            break
+
+        normal = np.array(plane_model[:3])
+        normal /= np.linalg.norm(normal)
+        z_component = abs(normal[2])
+
+        if z_component > best_z_component:
+            best_z_component = z_component
+            best_plane = np.asarray(plane_model)
+
+        # If this plane is clearly a floor (normal almost vertical), stop early
+        if z_component > 0.9:
+            break
+
+        # Remove inliers and try again to find a more horizontal plane
+        remaining = remaining.select_by_index(inlier_idx, invert=True)
+
+    if best_plane is None:
         raise MeshProcessingError("RANSAC could not detect a floor plane in the scan.")
 
-    mesh = _align_floor_to_z0(mesh, np.asarray(plane_model))
+    mesh = _align_floor_to_z0(mesh, best_plane)
 
-    # --- Export to a temp PLY for Trimesh ---
-    tmp = tempfile.NamedTemporaryFile(suffix=".ply", delete=False)
-    tmp.close()
-    o3d.io.write_triangle_mesh(tmp.name, mesh)
-
-    return Path(tmp.name)
+    return raw_mesh, mesh

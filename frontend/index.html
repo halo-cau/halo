@@ -666,6 +666,73 @@
         flex-shrink: 0;
       }
 
+      /* === Step 4: Real Scan Upload Panel === */
+      .scan-upload-panel {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        background: rgba(13, 18, 32, 0.95);
+        backdrop-filter: blur(12px);
+        border: 1px solid #1a2744;
+        border-radius: 12px;
+        padding: 28px 32px;
+        z-index: 20;
+        min-width: 380px;
+        display: none;
+      }
+      .scan-upload-panel h3 {
+        font-size: 15px; font-weight: 700; color: #00bcd4;
+        margin-bottom: 16px; text-transform: uppercase; letter-spacing: 0.5px;
+      }
+      .scan-upload-panel label {
+        display: block; font-size: 12px; color: #aaa; margin-bottom: 6px;
+      }
+      .scan-upload-panel input[type="file"],
+      .scan-upload-panel textarea {
+        width: 100%; margin-bottom: 14px; padding: 8px 10px;
+        background: #141d30; border: 1px solid #1a2744; border-radius: 6px;
+        color: #e0e0e0; font-size: 12px; font-family: monospace;
+      }
+      .scan-upload-panel textarea { height: 100px; resize: vertical; }
+      .scan-upload-panel .scan-btn-row {
+        display: flex; gap: 8px; margin-top: 4px;
+      }
+      .scan-upload-panel button {
+        flex: 1; padding: 8px 16px;
+        border: 1px solid #1a2744; border-radius: 6px;
+        background: #141d30; color: #ccc; cursor: pointer;
+        font-size: 13px; transition: all 0.2s;
+      }
+      .scan-upload-panel button:hover {
+        background: #00bcd4; border-color: #00bcd4; color: #000;
+      }
+      .scan-upload-panel button:disabled {
+        opacity: 0.4; cursor: not-allowed;
+      }
+      .scan-upload-panel .scan-status {
+        font-size: 11px; color: #888; margin-top: 10px; min-height: 16px;
+      }
+      .scan-upload-panel .scan-status.error { color: #ff1744; }
+
+      /* Voxel layer slider */
+      .voxel-controls {
+        position: absolute; top: 16px; right: 16px;
+        background: rgba(0,0,0,0.8); backdrop-filter: blur(8px);
+        padding: 10px 14px; border-radius: 8px; border: 1px solid #1a2744;
+        z-index: 10; display: none; min-width: 180px;
+      }
+      .voxel-controls label { font-size: 11px; color: #aaa; display: block; margin-bottom: 4px; }
+      .voxel-controls input[type="range"] {
+        width: 100%; -webkit-appearance: none; height: 6px; background: #1a2744;
+        border-radius: 3px; outline: none;
+      }
+      .voxel-controls input[type="range"]::-webkit-slider-thumb {
+        -webkit-appearance: none; width: 14px; height: 14px;
+        border-radius: 50%; background: #00bcd4; cursor: pointer;
+      }
+      .voxel-controls .vc-value { font-size: 11px; color: #fff; font-family: monospace; text-align: right; }
+
     </style>
   </head>
   <body>
@@ -691,6 +758,11 @@
         <div class="step">
           <div class="step-num">3</div>
           <span class="step-label">RL (PPO)</span>
+        </div>
+        <span class="step-arrow">&rarr;</span>
+        <div class="step">
+          <div class="step-num">4</div>
+          <span class="step-label">Real Scan</span>
         </div>
 
         <div class="steps-nav">
@@ -730,6 +802,32 @@
       <!-- 3D Viewport -->
       <div class="viewport" style="position:relative;">
         <canvas id="canvas"></canvas>
+
+        <!-- Scan Upload Panel (Step 4) -->
+        <div class="scan-upload-panel" id="scan-upload-panel">
+          <h3>Upload Room Scan</h3>
+          <label for="scan-obj-file">.OBJ Mesh File</label>
+          <input type="file" id="scan-obj-file" accept=".obj" />
+          <label for="scan-metadata">Equipment Metadata (JSON)</label>
+          <textarea id="scan-metadata" placeholder='{"racks":[], "cooling_units":[]}'>{}</textarea>
+          <div class="scan-btn-row">
+            <button type="button" id="scan-upload-btn">Upload &amp; Analyze</button>
+            <button type="button" id="scan-demo-btn">Load Demo</button>
+          </div>
+          <div class="scan-status" id="scan-status"></div>
+        </div>
+
+        <!-- Voxel Controls (Step 4 active) -->
+        <div class="voxel-controls" id="voxel-controls">
+          <label>Z-Layer Slice</label>
+          <input type="range" id="voxel-z-slider" min="0" max="60" value="60" step="1" />
+          <div class="vc-value" id="voxel-z-value">All</div>
+          <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">
+            <button type="button" id="vc-semantic" style="flex:1;padding:4px 8px;font-size:11px;border:1px solid #1a2744;border-radius:4px;background:#141d30;color:#ccc;cursor:pointer;">Semantic</button>
+            <button type="button" id="vc-thermal" style="flex:1;padding:4px 8px;font-size:11px;border:1px solid #1a2744;border-radius:4px;background:#141d30;color:#ccc;cursor:pointer;">Thermal</button>
+            <button type="button" id="vc-airflow" style="flex:1;padding:4px 8px;font-size:11px;border:1px solid #1a2744;border-radius:4px;background:#141d30;color:#ccc;cursor:pointer;">Airflow</button>
+          </div>
+        </div>
 
         <div class="viewport-overlay">
           <div class="scene-info">
@@ -800,6 +898,13 @@
               <div class="mon-value" id="mon-pue" style="color:#ff9800">1.00</div>
             </div>
           </div>
+        </div>
+
+        <!-- ASHRAE Metrics (Step 4 only) -->
+        <div class="panel-section" id="ashrae-section" style="display:none;">
+          <h3>ASHRAE Compliance</h3>
+          <div class="monitor-grid" id="ashrae-grid"></div>
+          <div id="ashrae-racks" style="margin-top:10px;"></div>
         </div>
 
         <!-- Score Section -->
