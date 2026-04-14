@@ -46,3 +46,8 @@ coverage/
 *.log
 *.tmp
 *.bak
+
+# RL model / Vecnorm
+ppo_logs/
+*.zip
+*.pkl
