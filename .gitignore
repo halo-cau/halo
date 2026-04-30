@@ -51,3 +51,4 @@ coverage/
 ppo_logs/
 *.zip
 *.pkl
+wandb/
