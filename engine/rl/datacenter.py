@@ -22,6 +22,7 @@ class DataCenterEnv(gym.Env):
         self.cp = 1005.0
         self.rho = 1.2
         self.airflow = 1.0
+        self.temp_decay = 0.95
 
         self.diff_sigma = 0.3
         self.cool_decay = 6.0
@@ -42,9 +43,16 @@ class DataCenterEnv(gym.Env):
         self.rack_map[:] = 0
         self.rack_dir[:] = 0
         self.temp[:] = 0
-
-        self.obstacle = self._generate_layout()
-        self.cooling_pos = self._generate_cooling(self.obstacle)
+        if options is not None:
+            self.obstacle = options.get("obstacle", self._generate_layout())
+            self.cooling_pos = options.get(
+                "cooling_pos", self._generate_cooling(self.obstacle)
+            )
+            self.num_cooler = len(self.cooling_pos)
+            self.rack_num = options.get("rack_num", self.rack_num)
+        else:
+            self.obstacle = self._generate_layout()
+            self.cooling_pos = self._generate_cooling(self.obstacle)
 
         self.step_count = 0
 
@@ -85,7 +93,7 @@ class DataCenterEnv(gym.Env):
 
     def _update_temp(self):
         temp = self.temp.copy()
-        temp += self._compute_exhaust()
+        temp = temp * self.temp_decay + self._compute_exhaust()
 
         flow = self._compute_airflow()
 
@@ -95,6 +103,8 @@ class DataCenterEnv(gym.Env):
         temp = scipy.ndimage.gaussian_filter(temp, sigma=self.diff_sigma)
 
         temp = self._apply_cooling(temp)
+
+        temp[self.obstacle == 1] = 0
 
         self.temp = np.clip(temp, 0, 5)
 
@@ -213,6 +223,7 @@ class DataCenterEnv(gym.Env):
             dists = np.linalg.norm(
                 rack_positions[:, None] - rack_positions[None, :], axis=-1
             )
+            dists = dists + np.eye(len(rack_positions)) * 1e6
             spread = np.mean(dists)
         else:
             spread = 0
@@ -278,13 +289,11 @@ class DataCenterEnv(gym.Env):
     def get_action_mask(self):
         mask = np.ones(self.grid_size * self.grid_size * 4, dtype=np.float32)
 
-        for i in range(self.grid_size):
-            for j in range(self.grid_size):
-                if self.rack_map[i, j] == 1 or self.obstacle[i, j] == 1:
-                    for d in range(4):
-                        idx = (i * self.grid_size + j) * 4 + d
-                        mask[idx] = 0
+        invalid = (self.rack_map == 1) | (self.obstacle == 1)
+        invalid = invalid.flatten()
 
+        for d in range(4):
+            mask[d::4][invalid] = 0
         return mask
 
     def action_masks(self):
