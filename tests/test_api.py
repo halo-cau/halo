@@ -30,7 +30,7 @@ def valid_obj_bytes(tmp_path: Path) -> bytes:
 def valid_metadata() -> str:
     return json.dumps(
         {
-            "ac_vents": [{"x": 1.0, "y": 1.0, "z": 1.0}],
+            "cooling_units": [{"position": {"x": 1.0, "y": 1.0, "z": 1.0}}],
             "legacy_servers": [{"x": 1.5, "y": 1.0, "z": 0.5}],
             "human_workspaces": [{"x": 2.0, "y": 1.5, "z": 0.1}],
         }
@@ -82,7 +82,7 @@ class TestProcessScanEndpoint:
     def test_invalid_metadata_rejected(
         self, client: TestClient, valid_obj_bytes: bytes
     ) -> None:
-        bad_meta = json.dumps({"ac_vents": [{"x": "not_a_number"}]})
+        bad_meta = json.dumps({"cooling_units": [{"position": {"x": "not_a_number"}}]})
         resp = client.post(
             "/api/v1/process-scan",
             files={"file": ("room.obj", valid_obj_bytes, "application/octet-stream")},
@@ -105,7 +105,7 @@ class TestProcessScanEndpoint:
         self, client: TestClient, valid_obj_bytes: bytes
     ) -> None:
         meta = json.dumps(
-            {"ac_vents": [], "legacy_servers": [], "human_workspaces": []}
+            {"cooling_units": [], "legacy_servers": [], "human_workspaces": []}
         )
         resp = client.post(
             "/api/v1/process-scan",
