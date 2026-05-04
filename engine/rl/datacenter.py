@@ -26,16 +26,21 @@ class DataCenterEnv(gym.Env):
 
         self.diff_sigma = 0.3
         self.cool_decay = 6.0
+        self.cool_strength = 0.5
+        self.cooling_power = 0.0
 
         self.action_space = spaces.Discrete(grid_size * grid_size * 4)
 
         self.observation_space = spaces.Box(
-            low=0, high=1, shape=(6, grid_size, grid_size), dtype=np.float32
+            low=0, high=1, shape=(8, grid_size, grid_size), dtype=np.float32
         )
 
         X, Y = np.meshgrid(np.arange(grid_size), np.arange(grid_size), indexing="ij")
         self.X = X.astype(np.float32)
         self.Y = Y.astype(np.float32)
+
+        self.cached_flow = None
+        self.flow_dirty = True
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
@@ -43,6 +48,10 @@ class DataCenterEnv(gym.Env):
         self.rack_map[:] = 0
         self.rack_dir[:] = 0
         self.temp[:] = 0
+        self.rack_power = np.zeros((self.grid_size, self.grid_size))
+        self.cached_flow = None
+        self.flow_dirty = True
+
         if options is not None:
             self.obstacle = options.get("obstacle", self._generate_layout())
             self.cooling_pos = options.get(
@@ -52,6 +61,10 @@ class DataCenterEnv(gym.Env):
             self.rack_num = options.get("rack_num", self.rack_num)
         else:
             self.obstacle = self._generate_layout()
+            free_mask = self.obstacle == 0
+            free_cells = np.sum(free_mask)
+            self.rack_num = self.np_random.integers(5, free_cells * 0.5)
+            self.num_cooler = self.np_random.integers(2, 10)
             self.cooling_pos = self._generate_cooling(self.obstacle)
 
         self.step_count = 0
@@ -69,12 +82,15 @@ class DataCenterEnv(gym.Env):
             return self._get_obs(), -100.0, False, False, {}
         self.rack_map[x, y] = 1
         self.rack_dir[x, y] = dir
+        self.rack_power[x, y] = np.random.uniform(0.8, 2.5)
 
         self.step_count += 1
 
         self._update_temp()
         reward = self._compute_reward()
         done = self.step_count >= self.rack_num
+
+        self.flow_dirty = True
 
         return self._get_obs(), reward, done, False, {}
 
@@ -86,18 +102,37 @@ class DataCenterEnv(gym.Env):
 
         dist = self._cooling_dist_map()
 
+        remaining = (self.rack_num - self.step_count) / self.rack_num
+        rack_num = np.ones((self.grid_size, self.grid_size)) * remaining
+
+        cooling_num = np.ones((self.grid_size, self.grid_size)) * (
+            self.num_cooler / 10.0
+        )
+
         return np.stack(
-            [self.rack_map, self.obstacle, self.temp, flow_x, flow_y, dist],
+            [
+                self.rack_map,
+                self.obstacle,
+                self.temp,
+                flow_x,
+                flow_y,
+                dist,
+                rack_num,
+                cooling_num,
+            ],
             axis=0,
         ).astype(np.float32)
 
     def _update_temp(self):
         temp = self.temp.copy()
+
+        self.rack_power = np.clip(self.rack_power, 0.5, 3.0)
+
         temp = temp * self.temp_decay + self._compute_exhaust()
 
         flow = self._compute_airflow()
 
-        for _ in range(5):
+        for _ in range(3):
             temp = self._advect(temp, flow)
 
         temp = scipy.ndimage.gaussian_filter(temp, sigma=self.diff_sigma)
@@ -112,13 +147,20 @@ class DataCenterEnv(gym.Env):
         temp = np.zeros_like(self.temp)
 
         dirs = np.array([(1, 0), (-1, 0), (0, 1), (0, -1)])
-
         racks = np.argwhere(self.rack_map == 1)
 
         for x, y in racks:
             d = dirs[int(self.rack_dir[x, y])]
 
-            power = 1.0
+            base_power = self.rack_power[x, y]
+
+            intake_x = np.clip(x - d[0], 0, self.grid_size - 1)
+            intake_y = np.clip(y - d[1], 0, self.grid_size - 1)
+            intake_temp = self.temp[intake_x, intake_y]
+
+            load = np.clip(base_power, 0.5, 3.0)
+            power = base_power * (1 + 0.5 * intake_temp + 0.2 * load)
+
             delta_T = power / (self.airflow * self.cp + 1e-6)
 
             rx = self.X - x
@@ -128,7 +170,6 @@ class DataCenterEnv(gym.Env):
             perp = np.abs(rx * d[1] - ry * d[0])
 
             jet = np.zeros_like(self.temp)
-
             valid = proj > 0
 
             jet[valid] = (
@@ -140,6 +181,9 @@ class DataCenterEnv(gym.Env):
         return temp
 
     def _compute_airflow(self):
+        if not self.flow_dirty:
+            return self.cached_flow
+
         flow = np.zeros((self.grid_size, self.grid_size, 2))
 
         for cx, cy in self.cooling_pos:
@@ -152,20 +196,24 @@ class DataCenterEnv(gym.Env):
             flow[:, :, 1] -= dy / dist
 
         dirs = np.array([(1, 0), (-1, 0), (0, 1), (0, -1)])
+        racks = np.argwhere(self.rack_map == 1)
 
-        mask = self.rack_map == 1
-        rack_indices = np.argwhere(mask)
-
-        for x, y in rack_indices:
+        for x, y in racks:
             d = dirs[int(self.rack_dir[x, y])]
             flow[x, y, 0] += d[0] * 2.0
             flow[x, y, 1] += d[1] * 2.0
 
         flow[self.obstacle == 1] = 0
 
-        flow = flow / (np.linalg.norm(flow, axis=-1, keepdims=True) + 1e-6)
+        norm = np.linalg.norm(flow, axis=-1, keepdims=True)
+        flow = flow / (norm + 1e-6)
+        flow = flow * np.tanh(norm)
+        flow = flow + 0.5
 
-        return flow * 0.5
+        self.cached_flow = flow
+        self.flow_dirty = False
+
+        return flow
 
     def _advect(self, temp, flow):
         x = self.X - flow[:, :, 0]
@@ -192,31 +240,46 @@ class DataCenterEnv(gym.Env):
         )
 
     def _apply_cooling(self, temp):
+        target_temp = 0.3
+        error = np.mean(temp) - target_temp
+
+        self.cooling_power = np.clip(self.cooling_power + 0.1 * error, 0.0, 2.0)
+
         for cx, cy in self.cooling_pos:
             d = np.sqrt((self.X - cx) ** 2 + (self.Y - cy) ** 2)
             effect = np.exp(-d / self.cool_decay)
 
-            temp -= effect * (temp - 0.2)
+            local_cooling = np.maximum(temp - target_temp, 0)
+
+            flow = self._compute_airflow()
+            flow_strength = np.linalg.norm(flow, axis=-1)
+
+            temp -= (
+                self.cooling_power * effect * local_cooling * (1 + 0.5 * flow_strength)
+            )
 
         return temp
 
     def _compute_reward(self):
         T = self.temp
-
         real_T = 15 + T * 4
 
         rec = np.logical_and(real_T >= 18, real_T <= 27)
         C_rec = np.mean(rec)
 
         violation = np.maximum(0, real_T - 32)
-        V = np.sum(violation)
+        V = np.mean(violation)
 
         H = np.max(real_T)
 
         energy = np.mean(T)
 
-        reward = 10 * C_rec - 0.2 * V - 0.3 * max(0, H - 27) - 0.05 * energy
+        hotspot = np.mean(real_T > 30)
+        severe = np.mean(real_T > 32)
 
+        cooling_cost = self.cooling_power**2
+
+        """
         rack_positions = np.argwhere(self.rack_map == 1)
 
         if len(rack_positions) > 1:
@@ -227,8 +290,18 @@ class DataCenterEnv(gym.Env):
             spread = np.mean(dists)
         else:
             spread = 0
-
+        
         reward += -0.1 * spread
+        """
+        reward = (
+            10 * C_rec
+            - 0.3 * V
+            - 0.5 * max(0, H - 27)
+            - 0.1 * energy
+            - 0.5 * cooling_cost
+            - 5 * hotspot
+            - 10 * severe
+        )
 
         return reward
 
