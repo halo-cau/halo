@@ -5,6 +5,29 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>HALO: Heat-Aware Layout Optimizer — 3D Demo</title>
     <style>
+      :root {
+        --bg: #FAFAF7;
+        --bg-card: #FDFCF9;
+        --bg-sunken: #F4F2EC;
+        --border: #E8E5DD;
+        --text-1: #2C2C2A;
+        --text-2: #5F5E5A;
+        --text-3: #888780;
+        --rack-gray: #B4B2A9;
+        --success: #1D9E75;
+        --success-bg: #E0F1E8;
+        --success-text: #0F6E56;
+        --info: #378ADD;
+        --info-text: #0C447C;
+        --warning: #E89E4F;
+        --warning-text: #A86B1A;
+        --danger: #E24B4A;
+        --danger-bg: #FCE8E8;
+        --danger-text: #A32D2D;
+        --special: #9747FF;
+        --special-text: #5F2DAA;
+      }
+
       * {
         margin: 0;
         padding: 0;
@@ -12,135 +35,185 @@
       }
 
       body {
-        font-family: "Pretendard", -apple-system, BlinkMacSystemFont, sans-serif;
-        background: #0a0e17;
-        color: #e0e0e0;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Pretendard",
+          system-ui, sans-serif;
+        background: var(--bg);
+        color: var(--text-1);
         overflow: hidden;
         height: 100vh;
+        display: flex;
+        flex-direction: column;
+        font-size: 13px;
+        font-weight: 400;
+        font-variant-numeric: tabular-nums;
       }
 
       /* === Header === */
       .header {
+        flex-shrink: 0;
         display: flex;
         align-items: center;
         justify-content: space-between;
-        padding: 12px 24px;
-        background: #0d1220;
-        border-bottom: 1px solid #1a2744;
+        padding: 12px 20px;
+        background: var(--bg-card);
+        border-bottom: 0.5px solid var(--border);
       }
 
       .header h1 {
-        font-size: 18px;
-        font-weight: 700;
-        color: #fff;
+        font-size: 14px;
+        font-weight: 500;
+        color: var(--text-1);
+        letter-spacing: 0.02em;
       }
 
       .header h1 span {
-        color: #00bcd4;
+        color: var(--text-1);
+        font-weight: 500;
+      }
+
+      .header h1 .bar {
+        color: var(--text-3);
+        margin: 0 8px;
+        font-weight: 400;
       }
 
       .header-badge {
         font-size: 11px;
-        background: #00bcd4;
-        color: #000;
-        padding: 3px 10px;
-        border-radius: 12px;
-        font-weight: 600;
+        background: var(--bg-sunken);
+        color: var(--text-2);
+        padding: 3px 8px;
+        border-radius: 4px;
+        font-weight: 500;
+        border: 0.5px solid var(--border);
+      }
+
+      .header-right {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+      }
+      .header-nav {
+        display: flex;
+        gap: 4px;
+      }
+      .header-nav a {
+        color: var(--text-2);
+        text-decoration: none;
+        font-size: 12px;
+        padding: 6px 12px;
+        border-radius: 6px;
+        border: 0.5px solid transparent;
+      }
+      .header-nav a:hover {
+        color: var(--text-1);
+        background: var(--bg-sunken);
+      }
+      .header-nav a.active {
+        color: var(--text-1);
+        border-color: var(--border);
+        background: var(--bg-sunken);
       }
 
       /* === Layout === */
       .layout {
-        display: grid;
-        grid-template-columns: 1fr 340px;
-        grid-template-rows: auto 1fr;
-        height: calc(100vh - 50px);
+        flex: 1;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
       }
 
       /* === Steps Bar === */
       .steps-bar {
-        grid-column: 1 / -1;
+        flex-shrink: 0;
         display: flex;
         align-items: center;
         gap: 8px;
-        padding: 12px 24px;
-        background: #0f1628;
-        border-bottom: 1px solid #1a2744;
+        padding: 10px 20px;
+        background: var(--bg-card);
+        border-bottom: 0.5px solid var(--border);
       }
 
       .step {
         display: flex;
         align-items: center;
         gap: 8px;
-        padding: 8px 16px;
-        border-radius: 8px;
-        background: #141d30;
+        padding: 6px 12px;
+        border-radius: 6px;
+        background: transparent;
         cursor: pointer;
-        transition: all 0.3s;
-        border: 1px solid transparent;
+        border: 0.5px solid var(--border);
+        color: var(--text-2);
       }
 
       .step:hover {
-        background: #1a2744;
+        background: var(--bg-sunken);
+        color: var(--text-1);
       }
 
       .step.active {
-        background: #00bcd422;
-        border-color: #00bcd4;
+        background: var(--success-bg);
+        border-color: var(--success);
+        color: var(--success-text);
       }
 
       .step-num {
-        width: 24px;
-        height: 24px;
-        border-radius: 50%;
-        background: #1a2744;
+        width: 20px;
+        height: 20px;
+        border-radius: 4px;
+        background: var(--bg-sunken);
         display: flex;
         align-items: center;
         justify-content: center;
-        font-size: 12px;
-        font-weight: 700;
+        font-size: 11px;
+        font-weight: 500;
+        color: var(--text-2);
+        border: 0.5px solid var(--border);
       }
 
       .step.active .step-num {
-        background: #00bcd4;
-        color: #000;
+        background: var(--success);
+        color: var(--bg-card);
+        border-color: var(--success);
       }
 
       .step-label {
-        font-size: 13px;
+        font-size: 12px;
+        font-weight: 500;
       }
 
       .step-arrow {
-        color: #555;
-        font-size: 18px;
+        color: var(--text-3);
+        font-size: 14px;
       }
 
       .steps-nav {
         margin-left: auto;
         display: flex;
-        gap: 8px;
+        gap: 6px;
       }
 
       .steps-nav button {
-        padding: 6px 16px;
-        border: 1px solid #1a2744;
+        padding: 6px 12px;
+        border: 0.5px solid var(--border);
         border-radius: 6px;
-        background: #141d30;
-        color: #ccc;
+        background: var(--bg-card);
+        color: var(--text-2);
         cursor: pointer;
-        font-size: 13px;
-        transition: all 0.2s;
+        font-size: 12px;
+        font-family: inherit;
       }
 
       .steps-nav button:hover {
-        background: #00bcd4;
-        border-color: #00bcd4;
-        color: #000;
+        background: var(--bg-sunken);
+        color: var(--text-1);
       }
 
       /* === 3D Viewport === */
       .viewport {
+        flex: 1;
+        min-height: 0;
         position: relative;
-        background: #080c14;
+        background: var(--bg);
       }
 
       .viewport canvas {
@@ -149,88 +222,62 @@
         display: block;
       }
 
-      .viewport-overlay {
-        position: absolute;
-        bottom: 16px;
-        left: 16px;
-        display: flex;
-        flex-direction: column;
-        gap: 8px;
-      }
-
-      .scene-info {
-        background: rgba(0, 0, 0, 0.8);
-        backdrop-filter: blur(8px);
-        padding: 12px 16px;
-        border-radius: 10px;
-        max-width: 400px;
-        border: 1px solid #1a2744;
-      }
-
-      .scene-info h2 {
-        font-size: 16px;
-        color: #00bcd4;
-        margin-bottom: 4px;
-      }
-
-      .scene-info p {
-        font-size: 12px;
-        color: #aaa;
-        line-height: 1.5;
-      }
-
       .viewport-controls {
         position: absolute;
         bottom: 16px;
         right: 16px;
         display: flex;
-        gap: 6px;
+        gap: 4px;
+        padding: 4px;
+        background: var(--bg-card);
+        border: 0.5px solid var(--border);
+        border-radius: 8px;
       }
 
       .viewport-controls button {
-        padding: 6px 12px;
-        border: 1px solid #1a2744;
-        border-radius: 6px;
-        background: rgba(0, 0, 0, 0.7);
-        color: #ccc;
+        padding: 6px 10px;
+        border: 0.5px solid transparent;
+        border-radius: 4px;
+        background: transparent;
+        color: var(--text-2);
         cursor: pointer;
-        font-size: 12px;
-        backdrop-filter: blur(8px);
+        font-size: 11px;
+        font-weight: 500;
+        font-family: inherit;
       }
 
       .viewport-controls button:hover {
-        background: #00bcd4;
-        border-color: #00bcd4;
-        color: #000;
+        background: var(--bg-sunken);
+        color: var(--text-1);
       }
 
       .viewport-controls button.active-toggle {
-        background: #00bcd433;
-        border-color: #00bcd4;
-        color: #00bcd4;
+        background: var(--success-bg);
+        border-color: var(--success);
+        color: var(--success-text);
       }
 
       /* === Right Panel === */
       .panel {
-        background: #0d1220;
-        border-left: 1px solid #1a2744;
+        background: var(--bg-card);
+        border-left: 0.5px solid var(--border);
         overflow-y: auto;
         display: flex;
         flex-direction: column;
       }
 
       .panel-section {
-        padding: 16px;
-        border-bottom: 1px solid #1a2744;
+        padding: 12px 14px;
+        border-bottom: 0.5px solid var(--border);
       }
 
       .panel-section h3 {
-        font-size: 13px;
-        font-weight: 700;
-        color: #00bcd4;
+        font-size: 11px;
+        font-weight: 500;
+        color: var(--text-2);
         margin-bottom: 12px;
         text-transform: uppercase;
-        letter-spacing: 0.5px;
+        letter-spacing: 0.04em;
       }
 
       /* Score bars */
@@ -243,15 +290,15 @@
 
       .score-label {
         font-size: 11px;
-        color: #999;
+        color: var(--text-2);
         width: 75px;
         flex-shrink: 0;
       }
 
       .score-bar-bg {
         flex: 1;
-        height: 8px;
-        background: #1a2744;
+        height: 6px;
+        background: var(--bg-sunken);
         border-radius: 4px;
         overflow: hidden;
       }
@@ -259,47 +306,47 @@
       .score-bar {
         height: 100%;
         border-radius: 4px;
-        transition: width 0.8s ease, background-color 0.5s;
+        transition: width 0.6s ease, background-color 0.4s;
         width: 0%;
       }
 
       .score-value {
         font-size: 12px;
-        font-weight: 700;
+        font-weight: 500;
         width: 30px;
         text-align: right;
-        font-variant-numeric: tabular-nums;
+        color: var(--text-1);
       }
 
       .score-row.total {
-        margin-bottom: 16px;
+        margin-bottom: 14px;
         padding-bottom: 10px;
-        border-bottom: 1px solid #1a2744;
+        border-bottom: 0.5px solid var(--border);
       }
 
       .score-row.total .score-label {
-        font-weight: 700;
-        color: #fff;
+        font-weight: 500;
+        color: var(--text-1);
         font-size: 12px;
       }
 
       .score-row.total .score-bar-bg {
-        height: 12px;
+        height: 8px;
       }
 
       .score-row.total .score-value {
-        font-size: 14px;
-        color: #fff;
+        font-size: 13px;
+        color: var(--text-1);
       }
 
       /* Scene Graph Panel */
       .sg-room {
-        font-size: 12px;
-        color: #888;
+        font-size: 11px;
+        color: var(--text-2);
         margin-bottom: 10px;
         padding: 6px 10px;
-        background: #141d30;
-        border-radius: 6px;
+        background: var(--bg-sunken);
+        border-radius: 4px;
       }
 
       .sg-nodes {
@@ -309,9 +356,9 @@
       }
 
       .sg-node {
-        background: #0f1628;
-        border: 1px solid #1a2744;
-        border-radius: 8px;
+        background: var(--bg-card);
+        border: 0.5px solid var(--border);
+        border-radius: 6px;
         padding: 8px 10px;
         font-size: 11px;
       }
@@ -321,6 +368,7 @@
         align-items: center;
         gap: 6px;
         margin-bottom: 4px;
+        color: var(--text-1);
       }
 
       .sg-dot {
@@ -331,22 +379,22 @@
       }
 
       .sg-id {
-        color: #555;
+        color: var(--text-3);
         font-size: 10px;
         margin-left: auto;
       }
 
       .sg-pos {
-        color: #666;
+        color: var(--text-3);
         font-size: 10px;
-        font-family: monospace;
+        font-family: ui-monospace, "SF Mono", Menlo, monospace;
         margin-bottom: 2px;
       }
 
       .sg-heat {
-        color: #ff5722;
+        color: var(--danger-text);
         font-size: 10px;
-        font-family: monospace;
+        font-family: ui-monospace, "SF Mono", Menlo, monospace;
         margin-bottom: 4px;
       }
 
@@ -356,57 +404,20 @@
         gap: 4px;
       }
 
-      .rel {
-        font-size: 9px;
-        padding: 2px 6px;
-        border-radius: 4px;
-        background: #1a2744;
-      }
-
-      .rel-cooling_serves {
-        color: #00bcd4;
-        border: 1px solid #00bcd444;
-      }
-
-      .rel-cable_connected {
-        color: #fdd835;
-        border: 1px solid #fdd83544;
-      }
-
-      .rel-hot_aisle {
-        color: #ff5722;
-        border: 1px solid #ff572244;
-      }
-
-      .rel-cold_aisle {
-        color: #2196f3;
-        border: 1px solid #2196f344;
-      }
-
-      .rel-adjacent_to {
-        color: #4caf50;
-        border: 1px solid #4caf5044;
-      }
-
-      .rel-grouped_with {
-        color: #ff9800;
-        border: 1px solid #ff980044;
-      }
-
       /* Chart */
       .chart-container {
-        padding: 16px;
+        padding: 12px 14px;
         flex: 1;
         min-height: 0;
       }
 
       .chart-container h3 {
-        font-size: 13px;
-        font-weight: 700;
-        color: #00bcd4;
+        font-size: 11px;
+        font-weight: 500;
+        color: var(--text-2);
         margin-bottom: 10px;
         text-transform: uppercase;
-        letter-spacing: 0.5px;
+        letter-spacing: 0.04em;
       }
 
       .chart-wrapper {
@@ -417,77 +428,51 @@
       .chart-wrapper canvas {
         width: 100%;
         height: 100%;
-        border-radius: 8px;
-      }
-
-      /* Relation legend */
-      .rel-legend {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 8px;
-        font-size: 10px;
-        color: #888;
-        padding: 8px 16px;
-        background: #0f1628;
-        border-bottom: 1px solid #1a2744;
-      }
-
-      .rel-legend > span {
-        display: flex;
-        align-items: center;
-        gap: 4px;
-      }
-
-      .rel-legend-line {
-        width: 16px;
-        height: 2px;
+        border-radius: 6px;
       }
 
       /* === Simulation Timeline === */
       .sim-bar {
-        grid-column: 1 / 2;
+        grid-column: 1 / -1;
         display: flex;
         align-items: center;
         gap: 12px;
-        padding: 10px 20px;
-        background: #0d1220;
-        border-top: 1px solid #1a2744;
+        padding: 8px 16px;
+        background: var(--bg-card);
+        border-top: 0.5px solid var(--border);
         position: absolute;
         bottom: 0;
         left: 0;
-        right: 340px;
+        right: 0;
         z-index: 10;
-        border-right: 1px solid #1a2744;
       }
 
       .sim-bar .sim-label {
-        font-size: 11px;
-        color: #00bcd4;
-        font-weight: 700;
+        font-size: 10px;
+        color: var(--text-2);
+        font-weight: 500;
         text-transform: uppercase;
-        letter-spacing: 0.5px;
+        letter-spacing: 0.06em;
         white-space: nowrap;
       }
 
       .sim-play {
-        width: 32px;
-        height: 32px;
-        border-radius: 50%;
-        border: 1px solid #1a2744;
-        background: #141d30;
-        color: #00bcd4;
-        font-size: 14px;
+        width: 26px;
+        height: 26px;
+        border-radius: 6px;
+        border: 0.5px solid var(--border);
+        background: var(--bg-card);
+        color: var(--text-1);
+        font-size: 11px;
         cursor: pointer;
         display: flex;
         align-items: center;
         justify-content: center;
         flex-shrink: 0;
-        transition: all 0.2s;
       }
 
       .sim-play:hover {
-        background: #00bcd4;
-        color: #000;
+        background: var(--bg-sunken);
       }
 
       .sim-slider-wrap {
@@ -502,8 +487,8 @@
         display: flex;
         justify-content: space-between;
         font-size: 9px;
-        color: #555;
-        font-family: monospace;
+        color: var(--text-3);
+        font-family: ui-monospace, "SF Mono", Menlo, monospace;
         padding: 0 2px;
       }
 
@@ -511,9 +496,9 @@
         -webkit-appearance: none;
         appearance: none;
         width: 100%;
-        height: 6px;
-        border-radius: 3px;
-        background: #1a2744;
+        height: 4px;
+        border-radius: 2px;
+        background: var(--bg-sunken);
         outline: none;
         cursor: pointer;
       }
@@ -521,29 +506,28 @@
       .sim-slider::-webkit-slider-thumb {
         -webkit-appearance: none;
         appearance: none;
-        width: 16px;
-        height: 16px;
+        width: 12px;
+        height: 12px;
         border-radius: 50%;
-        background: #00bcd4;
+        background: var(--text-1);
         cursor: pointer;
-        border: 2px solid #0d1220;
-        box-shadow: 0 0 6px #00bcd488;
+        border: 1.5px solid var(--bg-card);
       }
 
       .sim-slider::-moz-range-thumb {
-        width: 16px;
-        height: 16px;
+        width: 12px;
+        height: 12px;
         border-radius: 50%;
-        background: #00bcd4;
+        background: var(--text-1);
         cursor: pointer;
-        border: 2px solid #0d1220;
+        border: 1.5px solid var(--bg-card);
       }
 
       .sim-clock {
-        font-size: 18px;
-        font-weight: 700;
-        font-family: monospace;
-        color: #fff;
+        font-size: 14px;
+        font-weight: 500;
+        font-family: ui-monospace, "SF Mono", Menlo, monospace;
+        color: var(--text-1);
         min-width: 50px;
         text-align: center;
         flex-shrink: 0;
@@ -551,34 +535,34 @@
 
       .sim-speed {
         font-size: 10px;
-        color: #666;
-        background: #141d30;
-        border: 1px solid #1a2744;
+        color: var(--text-2);
+        background: var(--bg-card);
+        border: 0.5px solid var(--border);
         border-radius: 4px;
-        padding: 2px 6px;
+        padding: 3px 8px;
         cursor: pointer;
         flex-shrink: 0;
-        transition: all 0.2s;
+        font-family: inherit;
       }
 
       .sim-speed:hover {
-        border-color: #00bcd4;
-        color: #00bcd4;
+        background: var(--bg-sunken);
+        color: var(--text-1);
       }
 
       /* === Real-time Monitor Panel === */
       .monitor-section {
-        padding: 12px 16px;
-        border-bottom: 1px solid #1a2744;
+        padding: 12px 14px;
+        border-bottom: 0.5px solid var(--border);
       }
 
       .monitor-section h3 {
-        font-size: 13px;
-        font-weight: 700;
-        color: #00bcd4;
+        font-size: 11px;
+        font-weight: 500;
+        color: var(--text-2);
         margin-bottom: 10px;
         text-transform: uppercase;
-        letter-spacing: 0.5px;
+        letter-spacing: 0.04em;
       }
 
       .monitor-grid {
@@ -588,50 +572,48 @@
       }
 
       .monitor-card {
-        background: #141d30;
-        border: 1px solid #1a2744;
-        border-radius: 8px;
+        background: var(--bg-card);
+        border: 0.5px solid var(--border);
+        border-radius: 6px;
         padding: 10px;
-        text-align: center;
       }
 
       .monitor-card .mon-label {
-        font-size: 9px;
-        color: #888;
-        text-transform: uppercase;
-        letter-spacing: 0.3px;
+        font-size: 10px;
+        color: var(--text-2);
         margin-bottom: 4px;
       }
 
       .monitor-card .mon-value {
-        font-size: 20px;
-        font-weight: 700;
-        font-family: monospace;
+        font-size: 22px;
+        font-weight: 500;
         font-variant-numeric: tabular-nums;
+        color: var(--text-1);
       }
 
       .monitor-card .mon-unit {
-        font-size: 10px;
-        color: #666;
+        font-size: 11px;
+        color: var(--text-3);
         margin-left: 2px;
+        font-weight: 400;
       }
 
-      .mon-value.temp-ok { color: #00e676; }
-      .mon-value.temp-warn { color: #ffab00; }
-      .mon-value.temp-danger { color: #ff1744; }
+      .mon-value.temp-ok { color: var(--success-text); }
+      .mon-value.temp-warn { color: var(--warning-text); }
+      .mon-value.temp-danger { color: var(--danger-text); }
 
       .load-bar-bg {
         width: 100%;
-        height: 6px;
-        background: #1a2744;
-        border-radius: 3px;
+        height: 4px;
+        background: var(--bg-sunken);
+        border-radius: 2px;
         margin-top: 6px;
         overflow: hidden;
       }
 
       .load-bar {
         height: 100%;
-        border-radius: 3px;
+        border-radius: 2px;
         transition: width 0.3s ease, background-color 0.3s;
       }
 
@@ -642,14 +624,13 @@
         display: flex;
         flex-direction: column;
         gap: 6px;
-        background: rgba(0, 0, 0, 0.75);
-        backdrop-filter: blur(8px);
-        padding: 10px 14px;
-        border-radius: 8px;
-        border: 1px solid #1a2744;
+        background: var(--bg-card);
+        padding: 10px 12px;
+        border-radius: 6px;
+        border: 0.5px solid var(--border);
         z-index: 10;
         font-size: 11px;
-        color: #ccc;
+        color: var(--text-2);
       }
 
       .af-legend-item {
@@ -659,10 +640,10 @@
       }
 
       .af-legend-box {
-        width: 14px;
-        height: 14px;
+        width: 12px;
+        height: 12px;
         border-radius: 3px;
-        border: 1px solid;
+        border: 0.5px solid;
         flex-shrink: 0;
       }
 
@@ -672,74 +653,90 @@
         top: 50%;
         left: 50%;
         transform: translate(-50%, -50%);
-        background: rgba(13, 18, 32, 0.95);
-        backdrop-filter: blur(12px);
-        border: 1px solid #1a2744;
-        border-radius: 12px;
-        padding: 28px 32px;
+        background: var(--bg-card);
+        border: 0.5px solid var(--border);
+        border-radius: 10px;
+        padding: 20px 24px;
         z-index: 20;
-        min-width: 380px;
+        min-width: 360px;
         display: none;
       }
       .scan-upload-panel h3 {
-        font-size: 15px; font-weight: 700; color: #00bcd4;
-        margin-bottom: 16px; text-transform: uppercase; letter-spacing: 0.5px;
+        font-size: 12px; font-weight: 500; color: var(--text-2);
+        margin-bottom: 14px; text-transform: uppercase; letter-spacing: 0.06em;
       }
       .scan-upload-panel label {
-        display: block; font-size: 12px; color: #aaa; margin-bottom: 6px;
+        display: block; font-size: 11px; color: var(--text-2); margin-bottom: 4px;
       }
       .scan-upload-panel input[type="file"],
       .scan-upload-panel textarea {
-        width: 100%; margin-bottom: 14px; padding: 8px 10px;
-        background: #141d30; border: 1px solid #1a2744; border-radius: 6px;
-        color: #e0e0e0; font-size: 12px; font-family: monospace;
+        width: 100%; margin-bottom: 12px; padding: 8px 10px;
+        background: var(--bg); border: 0.5px solid var(--border); border-radius: 6px;
+        color: var(--text-1); font-size: 12px;
+        font-family: ui-monospace, "SF Mono", Menlo, monospace;
       }
       .scan-upload-panel textarea { height: 100px; resize: vertical; }
       .scan-upload-panel .scan-btn-row {
-        display: flex; gap: 8px; margin-top: 4px;
+        display: flex; gap: 6px; margin-top: 4px;
       }
       .scan-upload-panel button {
-        flex: 1; padding: 8px 16px;
-        border: 1px solid #1a2744; border-radius: 6px;
-        background: #141d30; color: #ccc; cursor: pointer;
-        font-size: 13px; transition: all 0.2s;
+        flex: 1; padding: 8px 12px;
+        border: 0.5px solid var(--border); border-radius: 6px;
+        background: var(--bg-card); color: var(--text-1); cursor: pointer;
+        font-size: 12px; font-family: inherit; font-weight: 500;
       }
       .scan-upload-panel button:hover {
-        background: #00bcd4; border-color: #00bcd4; color: #000;
+        background: var(--bg-sunken);
+      }
+      .scan-upload-panel button.primary {
+        background: var(--text-1); color: var(--bg-card); border-color: var(--text-1);
+      }
+      .scan-upload-panel button.primary:hover {
+        background: #1a1a18;
       }
       .scan-upload-panel button:disabled {
         opacity: 0.4; cursor: not-allowed;
       }
       .scan-upload-panel .scan-status {
-        font-size: 11px; color: #888; margin-top: 10px; min-height: 16px;
+        font-size: 11px; color: var(--text-2); margin-top: 10px; min-height: 16px;
       }
-      .scan-upload-panel .scan-status.error { color: #ff1744; }
+      .scan-upload-panel .scan-status.error { color: var(--danger-text); }
 
       /* Voxel layer slider */
       .voxel-controls {
         position: absolute; top: 16px; right: 16px;
-        background: rgba(0,0,0,0.8); backdrop-filter: blur(8px);
-        padding: 10px 14px; border-radius: 8px; border: 1px solid #1a2744;
+        background: var(--bg-card);
+        padding: 10px 12px; border-radius: 6px; border: 0.5px solid var(--border);
         z-index: 10; display: none; min-width: 180px;
       }
-      .voxel-controls label { font-size: 11px; color: #aaa; display: block; margin-bottom: 4px; }
+      .voxel-controls label { font-size: 10px; color: var(--text-2); display: block; margin-bottom: 4px; }
       .voxel-controls input[type="range"] {
-        width: 100%; -webkit-appearance: none; height: 6px; background: #1a2744;
-        border-radius: 3px; outline: none;
+        width: 100%; -webkit-appearance: none; height: 4px; background: var(--bg-sunken);
+        border-radius: 2px; outline: none;
       }
       .voxel-controls input[type="range"]::-webkit-slider-thumb {
-        -webkit-appearance: none; width: 14px; height: 14px;
-        border-radius: 50%; background: #00bcd4; cursor: pointer;
+        -webkit-appearance: none; width: 12px; height: 12px;
+        border-radius: 50%; background: var(--text-1); cursor: pointer;
       }
-      .voxel-controls .vc-value { font-size: 11px; color: #fff; font-family: monospace; text-align: right; }
+      .voxel-controls .vc-value {
+        font-size: 11px; color: var(--text-1);
+        font-family: ui-monospace, "SF Mono", Menlo, monospace; text-align: right;
+      }
 
     </style>
   </head>
   <body>
     <!-- Header -->
     <div class="header">
-      <h1><span>HALO</span> | Heat-Aware Layout Optimizer</h1>
-      <span class="header-badge">Capstone 2026</span>
+      <h1><span>HALO</span><span class="bar">|</span>Heat-Aware Layout Optimizer</h1>
+      <div class="header-right">
+        <nav class="header-nav">
+          <a href="./index.html" class="active">시나리오</a>
+          <a href="./components.html">컴포넌트</a>
+          <a href="./dashboard.html">대시보드</a>
+          <a href="./scan.html">스캔</a>
+        </nav>
+      </div>
     </div>
 
     <div class="layout">
@@ -752,16 +749,11 @@
         <span class="step-arrow">&rarr;</span>
         <div class="step">
           <div class="step-num">2</div>
-          <span class="step-label">Rule-Based</span>
-        </div>
-        <span class="step-arrow">&rarr;</span>
-        <div class="step">
-          <div class="step-num">3</div>
           <span class="step-label">RL (PPO)</span>
         </div>
         <span class="step-arrow">&rarr;</span>
         <div class="step">
-          <div class="step-num">4</div>
+          <div class="step-num">3</div>
           <span class="step-label">Real Scan</span>
         </div>
 
@@ -769,34 +761,6 @@
           <button type="button" id="btn-prev">&larr; Prev</button>
           <button type="button" id="btn-next">Next &rarr;</button>
         </div>
-      </div>
-
-      <!-- Relation Legend -->
-      <div class="rel-legend" style="grid-column: 1 / -1">
-        <span>
-          <span class="rel-legend-line" style="background: #00bcd4"></span>
-          cooling_serves
-        </span>
-        <span>
-          <span class="rel-legend-line" style="background: #fdd835"></span>
-          cable_connected
-        </span>
-        <span>
-          <span class="rel-legend-line" style="background: #ff5722"></span>
-          hot_aisle
-        </span>
-        <span>
-          <span class="rel-legend-line" style="background: #2196f3"></span>
-          cold_aisle
-        </span>
-        <span>
-          <span class="rel-legend-line" style="background: #4caf50"></span>
-          adjacent_to
-        </span>
-        <span>
-          <span class="rel-legend-line" style="background: #ff9800"></span>
-          grouped_with
-        </span>
       </div>
 
       <!-- 3D Viewport -->
@@ -811,7 +775,7 @@
           <label for="scan-metadata">Equipment Metadata (JSON)</label>
           <textarea id="scan-metadata" placeholder='{"racks":[], "cooling_units":[]}'>{}</textarea>
           <div class="scan-btn-row">
-            <button type="button" id="scan-upload-btn">Upload &amp; Analyze</button>
+            <button type="button" class="primary" id="scan-upload-btn">Upload &amp; Analyze</button>
             <button type="button" id="scan-demo-btn">Load Demo</button>
           </div>
           <div class="scan-status" id="scan-status"></div>
@@ -823,40 +787,32 @@
           <input type="range" id="voxel-z-slider" min="0" max="60" value="60" step="1" />
           <div class="vc-value" id="voxel-z-value">All</div>
           <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">
-            <button type="button" id="vc-semantic" style="flex:1;padding:4px 8px;font-size:11px;border:1px solid #1a2744;border-radius:4px;background:#141d30;color:#ccc;cursor:pointer;">Semantic</button>
-            <button type="button" id="vc-thermal" style="flex:1;padding:4px 8px;font-size:11px;border:1px solid #1a2744;border-radius:4px;background:#141d30;color:#ccc;cursor:pointer;">Thermal</button>
-            <button type="button" id="vc-airflow" style="flex:1;padding:4px 8px;font-size:11px;border:1px solid #1a2744;border-radius:4px;background:#141d30;color:#ccc;cursor:pointer;">Airflow</button>
-          </div>
-        </div>
-
-        <div class="viewport-overlay">
-          <div class="scene-info">
-            <h2 id="scene-title">무작위 배치</h2>
-            <p id="scene-desc">규칙 없이 랜덤으로 배치한 결과.</p>
+            <button type="button" id="vc-semantic" style="flex:1;padding:4px 8px;font-size:10px;border:0.5px solid var(--border);border-radius:4px;background:var(--bg-card);color:var(--text-2);cursor:pointer;font-family:inherit;">Semantic</button>
+            <button type="button" id="vc-thermal" style="flex:1;padding:4px 8px;font-size:10px;border:0.5px solid var(--border);border-radius:4px;background:var(--bg-card);color:var(--text-2);cursor:pointer;font-family:inherit;">Thermal</button>
+            <button type="button" id="vc-airflow" style="flex:1;padding:4px 8px;font-size:10px;border:0.5px solid var(--border);border-radius:4px;background:var(--bg-card);color:var(--text-2);cursor:pointer;font-family:inherit;">Airflow</button>
           </div>
         </div>
 
         <!-- Airflow Zone Legend -->
         <div class="airflow-legend" id="airflow-legend" style="display:none;">
           <span class="af-legend-item">
-            <span class="af-legend-box" style="background:rgba(68,170,255,0.35);border-color:#44aaff;"></span>
+            <span class="af-legend-box" style="background:rgba(55,138,221,0.18);border-color:#378ADD;"></span>
             Cold Air Zone
           </span>
           <span class="af-legend-item">
-            <span class="af-legend-box" style="background:rgba(255,221,68,0.35);border-color:#ffdd44;"></span>
+            <span class="af-legend-box" style="background:rgba(232,158,79,0.20);border-color:#E89E4F;"></span>
             Hot Air Zone
           </span>
           <span class="af-legend-item">
-            <span class="af-legend-box" style="background:rgba(255,23,68,0.35);border-color:#ff1744;"></span>
+            <span class="af-legend-box" style="background:rgba(226,75,74,0.20);border-color:#E24B4A;"></span>
             Recirculation
           </span>
         </div>
 
-        <div class="viewport-controls" style="bottom: 60px;">
+        <div class="viewport-controls" style="bottom: 56px;">
           <button type="button" id="btn-heatmap">Heatmap</button>
           <button type="button" id="btn-airflow">Airflow</button>
           <button type="button" id="btn-zones">Zones</button>
-          <button type="button" id="btn-relations" data-showing="true">Hide Relations</button>
         </div>
 
         <!-- Simulation Timeline -->
@@ -874,106 +830,6 @@
         </div>
       </div>
 
-      <!-- Right Panel -->
-      <div class="panel">
-        <!-- Real-time Monitor -->
-        <div class="monitor-section">
-          <h3>Real-time Monitor</h3>
-          <div class="monitor-grid">
-            <div class="monitor-card">
-              <div class="mon-label">Server Load</div>
-              <div class="mon-value" id="mon-load">0<span class="mon-unit">%</span></div>
-              <div class="load-bar-bg"><div class="load-bar" id="mon-load-bar"></div></div>
-            </div>
-            <div class="monitor-card">
-              <div class="mon-label">Max Temp</div>
-              <div class="mon-value temp-ok" id="mon-temp">22<span class="mon-unit">&deg;C</span></div>
-            </div>
-            <div class="monitor-card">
-              <div class="mon-label">Cooling Energy</div>
-              <div class="mon-value" id="mon-cooling" style="color:#00bcd4">0<span class="mon-unit">kW</span></div>
-            </div>
-            <div class="monitor-card">
-              <div class="mon-label">PUE</div>
-              <div class="mon-value" id="mon-pue" style="color:#ff9800">1.00</div>
-            </div>
-          </div>
-        </div>
-
-        <!-- ASHRAE Metrics (Step 4 only) -->
-        <div class="panel-section" id="ashrae-section" style="display:none;">
-          <h3>ASHRAE Compliance</h3>
-          <div class="monitor-grid" id="ashrae-grid"></div>
-          <div id="ashrae-racks" style="margin-top:10px;"></div>
-        </div>
-
-        <!-- Score Section -->
-        <div class="panel-section">
-          <h3>Reward Score</h3>
-
-          <div class="score-row total">
-            <span class="score-label">TOTAL</span>
-            <div class="score-bar-bg">
-              <div class="score-bar" id="bar-total"></div>
-            </div>
-            <span class="score-value" id="val-total">0</span>
-          </div>
-
-          <div class="score-row">
-            <span class="score-label">Thermal</span>
-            <div class="score-bar-bg">
-              <div class="score-bar" id="bar-thermal"></div>
-            </div>
-            <span class="score-value" id="val-thermal">0</span>
-          </div>
-
-          <div class="score-row">
-            <span class="score-label">Cooling</span>
-            <div class="score-bar-bg">
-              <div class="score-bar" id="bar-cooling"></div>
-            </div>
-            <span class="score-value" id="val-cooling">0</span>
-          </div>
-
-          <div class="score-row">
-            <span class="score-label">Cable</span>
-            <div class="score-bar-bg">
-              <div class="score-bar" id="bar-cable"></div>
-            </div>
-            <span class="score-value" id="val-cable">0</span>
-          </div>
-
-          <div class="score-row">
-            <span class="score-label">Proximity</span>
-            <div class="score-bar-bg">
-              <div class="score-bar" id="bar-proximity"></div>
-            </div>
-            <span class="score-value" id="val-proximity">0</span>
-          </div>
-
-          <div class="score-row">
-            <span class="score-label">Constraint</span>
-            <div class="score-bar-bg">
-              <div class="score-bar" id="bar-constraint"></div>
-            </div>
-            <span class="score-value" id="val-constraint">0</span>
-          </div>
-        </div>
-
-        <!-- Scene Graph Section -->
-        <div class="panel-section" style="flex: 1; overflow-y: auto">
-          <h3>Scene Graph</h3>
-          <div id="sg-content"></div>
-        </div>
-
-        <!-- Training Chart -->
-        <div class="chart-container">
-          <h3>Training Progress</h3>
-          <div class="chart-wrapper">
-            <canvas id="chart"></canvas>
-          </div>
-        </div>
-      </div>
     </div>
 
     <script type="module" src="/src/main.ts"></script>

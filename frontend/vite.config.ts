@@ -15,6 +15,8 @@ export default defineConfig({
       input: {
         main: "index.html",
         scan: "scan.html",
+        components: "components.html",
+        dashboard: "dashboard.html",
       },
     },
   },

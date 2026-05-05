@@ -19,7 +19,7 @@ const demoBtn = document.getElementById("demo-btn") as HTMLButtonElement;
 // ── Three.js setup ────────────────────────────────────────
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
 renderer.setPixelRatio(window.devicePixelRatio);
-renderer.setClearColor(0x0a0e17);
+renderer.setClearColor(0xf4f2ec);
 renderer.shadowMap.enabled = true;
 
 const scene = new THREE.Scene();
@@ -40,7 +40,7 @@ dirLight.castShadow = true;
 scene.add(dirLight);
 
 // Grid helper — lies on XY plane (Z-up)
-const grid = new THREE.GridHelper(20, 40, 0x1a2744, 0x111827);
+const grid = new THREE.GridHelper(20, 40, 0xe8e5dd, 0xf4f2ec);
 grid.rotation.x = Math.PI / 2; // rotate from XZ-plane to XY-plane
 scene.add(grid);
 
@@ -122,15 +122,15 @@ interface VisualizeResult {
 }
 let result: VisualizeResult | null = null;
 
-// Semantic label → color mapping (matches legend)
+// Semantic label → color mapping (matches legend, design-system palette)
 const LABEL_COLORS: Record<number, THREE.Color> = {
-  1: new THREE.Color(0xb4b4b4), // wall
-  2: new THREE.Color(0xe63c3c), // legacy server (heat)
-  3: new THREE.Color(0x3c8ce6), // AC vent (cooling)
-  4: new THREE.Color(0x3cc864), // human workspace
-  5: new THREE.Color(0x555555), // rack body
-  6: new THREE.Color(0x00bcd4), // rack intake
-  7: new THREE.Color(0xff9800), // rack exhaust
+  1: new THREE.Color(0xb4b2a9), // wall — rack-gray
+  2: new THREE.Color(0xe24b4a), // legacy server (heat) — danger
+  3: new THREE.Color(0x378add), // AC vent (cooling) — info blue
+  4: new THREE.Color(0x1d9e75), // human workspace — success green
+  5: new THREE.Color(0x888780), // rack body — text-3 muted gray
+  6: new THREE.Color(0x378add), // rack intake — calm blue
+  7: new THREE.Color(0xe89e4f), // rack exhaust — warning amber
 };
 
 // ── Helpers ───────────────────────────────────────────────
@@ -151,7 +151,7 @@ function clearMesh() {
       if (child instanceof THREE.Mesh) {
         child.geometry.dispose();
         if (Array.isArray(child.material)) {
-          child.material.forEach((m) => m.dispose());
+          for (const m of child.material) m.dispose();
         } else {
           child.material.dispose();
         }
@@ -206,15 +206,13 @@ function loadGlb(b64: string) {
       const center = box.getCenter(new THREE.Vector3());
       const size = box.getSize(new THREE.Vector3());
       const maxDim = Math.max(size.x, size.y, size.z);
-      camera.position.copy(
-        center.clone().add(new THREE.Vector3(maxDim, maxDim * 0.8, maxDim))
-      );
+      camera.position.copy(center.clone().add(new THREE.Vector3(maxDim, maxDim * 0.8, maxDim)));
       controls.target.copy(center);
       controls.update();
     },
     (err) => {
       setStatus(`GLB parse error: ${err}`, true);
-    }
+    },
   );
 }
 
@@ -246,7 +244,7 @@ function loadVoxelGrid(data: VoxelData) {
       opacity: 0.25,
       depthWrite: false,
     }),
-    count
+    count,
   );
 
   const dummy = new THREE.Object3D();
@@ -260,7 +258,7 @@ function loadVoxelGrid(data: VoxelData) {
     dummy.position.set(
       data.origin[0] + (ix + 0.5) * vs,
       data.origin[1] + (iy + 0.5) * vs,
-      data.origin[2] + (iz + 0.5) * vs
+      data.origin[2] + (iz + 0.5) * vs,
     );
     dummy.updateMatrix();
     instanced.setMatrixAt(i, dummy.matrix);
@@ -282,34 +280,43 @@ function loadVoxelGrid(data: VoxelData) {
   const center = box.getCenter(new THREE.Vector3());
   const size = box.getSize(new THREE.Vector3());
   const maxDim = Math.max(size.x, size.y, size.z);
-  camera.position.copy(
-    center.clone().add(new THREE.Vector3(maxDim, maxDim * 0.8, maxDim))
-  );
+  camera.position.copy(center.clone().add(new THREE.Vector3(maxDim, maxDim * 0.8, maxDim)));
   controls.target.copy(center);
   controls.update();
 }
 
 // ── Thermal heatmap renderer ─────────────────────────────
 function tempToColor(t: number, minT: number, maxT: number): THREE.Color {
-  // Map temperature to [0,1], then apply a power curve to emphasize
-  // differences around ambient (the middle of the range).
+  // CFD-standard Jet colormap (MATLAB Jet) for temperature voxels.
+  // Dark blue (cold) → blue → cyan → green → yellow → red → dark red (hot).
   let frac = maxT > minT ? (t - minT) / (maxT - minT) : 0.5;
   frac = Math.max(0, Math.min(1, frac));
-  // Slight gamma to spread out the mid-range
-  frac = Math.pow(frac, 0.8);
 
-  // 5-stop colour ramp: Blue → Cyan → Green → Yellow → Red
-  const c = new THREE.Color();
-  if (frac < 0.25) {
-    c.setRGB(0, frac * 4, 1);                    // blue → cyan
-  } else if (frac < 0.5) {
-    c.setRGB(0, 1, 1 - (frac - 0.25) * 4);      // cyan → green
-  } else if (frac < 0.75) {
-    c.setRGB((frac - 0.5) * 4, 1, 0);            // green → yellow
-  } else {
-    c.setRGB(1, 1 - (frac - 0.75) * 4, 0);      // yellow → red
+  const stops = [
+    [0.0, 0.0, 0.5],
+    [0.0, 0.0, 1.0],
+    [0.0, 1.0, 1.0],
+    [1.0, 1.0, 0.0],
+    [1.0, 0.0, 0.0],
+    [0.5, 0.0, 0.0],
+  ];
+  const positions = [0.0, 0.125, 0.375, 0.625, 0.875, 1.0];
+
+  let lo = 0;
+  for (let i = 1; i < positions.length; i++) {
+    if (frac <= positions[i]) {
+      lo = i - 1;
+      break;
+    }
+    lo = i;
   }
-  return c;
+  const hi = Math.min(lo + 1, positions.length - 1);
+  const span = positions[hi] - positions[lo] || 1;
+  const t01 = (frac - positions[lo]) / span;
+  const r = stops[lo][0] + (stops[hi][0] - stops[lo][0]) * t01;
+  const g = stops[lo][1] + (stops[hi][1] - stops[lo][1]) * t01;
+  const b = stops[lo][2] + (stops[hi][2] - stops[lo][2]) * t01;
+  return new THREE.Color(r, g, b);
 }
 
 function loadThermalGrid(voxel: VoxelData, thermal: ThermalData) {
@@ -331,7 +338,7 @@ function loadThermalGrid(voxel: VoxelData, thermal: ThermalData) {
   for (let i = 0; i < thermal.positions.length; i++) {
     const [ix, iy, iz] = thermal.positions[i];
     const label = labelMap.get(`${ix},${iy},${iz}`) ?? 0;
-    if (label !== 1) indices.push(i);  // skip walls
+    if (label !== 1) indices.push(i); // skip walls
   }
 
   const count = indices.length;
@@ -351,7 +358,7 @@ function loadThermalGrid(voxel: VoxelData, thermal: ThermalData) {
       depthWrite: false,
       side: THREE.DoubleSide,
     }),
-    count
+    count,
   );
 
   const dummy = new THREE.Object3D();
@@ -365,7 +372,7 @@ function loadThermalGrid(voxel: VoxelData, thermal: ThermalData) {
     dummy.position.set(
       voxel.origin[0] + (ix + 0.5) * vs,
       voxel.origin[1] + (iy + 0.5) * vs,
-      voxel.origin[2] + (iz + 0.5) * vs
+      voxel.origin[2] + (iz + 0.5) * vs,
     );
     dummy.updateMatrix();
     instanced.setMatrixAt(j, dummy.matrix);
@@ -387,9 +394,7 @@ function loadThermalGrid(voxel: VoxelData, thermal: ThermalData) {
   const center = box.getCenter(new THREE.Vector3());
   const size = box.getSize(new THREE.Vector3());
   const maxDim = Math.max(size.x, size.y, size.z);
-  camera.position.copy(
-    center.clone().add(new THREE.Vector3(maxDim, maxDim * 0.8, maxDim))
-  );
+  camera.position.copy(center.clone().add(new THREE.Vector3(maxDim, maxDim * 0.8, maxDim)));
   controls.target.copy(center);
   controls.update();
 }
@@ -406,18 +411,14 @@ const ASHRAE_ALLOW_HI = 35;
 
 function intakeComplianceColor(temp: number): THREE.Color {
   if (temp >= ASHRAE_REC_LO && temp <= ASHRAE_REC_HI) {
-    return new THREE.Color(0x2ecc71); // green — recommended range
+    return new THREE.Color(0x1d9e75); // deep green — recommended
   } else if (temp >= ASHRAE_ALLOW_LO && temp <= ASHRAE_ALLOW_HI) {
-    return new THREE.Color(0xf39c12); // amber — within allowable
+    return new THREE.Color(0xe89e4f); // amber — within allowable
   }
-  return new THREE.Color(0xe74c3c); // red — violation
+  return new THREE.Color(0xe24b4a); // muted red — violation
 }
 
-function loadMetricsOverlay(
-  voxel: VoxelData,
-  thermal: ThermalData,
-  metrics: MetricsData
-) {
+function loadMetricsOverlay(voxel: VoxelData, thermal: ThermalData, metrics: MetricsData) {
   clearMesh();
   meshGroup = new THREE.Group();
 
@@ -453,7 +454,7 @@ function loadMetricsOverlay(
       depthWrite: false,
       side: THREE.DoubleSide,
     }),
-    count
+    count,
   );
 
   const dummy = new THREE.Object3D();
@@ -468,7 +469,7 @@ function loadMetricsOverlay(
     dummy.position.set(
       voxel.origin[0] + (ix + 0.5) * vs,
       voxel.origin[1] + (iy + 0.5) * vs,
-      voxel.origin[2] + (iz + 0.5) * vs
+      voxel.origin[2] + (iz + 0.5) * vs,
     );
     dummy.updateMatrix();
     instanced.setMatrixAt(j, dummy.matrix);
@@ -477,8 +478,8 @@ function loadMetricsOverlay(
     if (label === 6 || label === 7) {
       color.copy(intakeComplianceColor(temp));
     } else if (label === 3) {
-      // AC vent — blue
-      color.set(0x3c8ce6);
+      // AC vent — calm blue
+      color.set(0x378add);
     } else {
       // Regular air: thermal heatmap
       color.copy(tempToColor(temp, thermal.min_temp, thermal.max_temp));
@@ -497,9 +498,7 @@ function loadMetricsOverlay(
   const center = box.getCenter(new THREE.Vector3());
   const size = box.getSize(new THREE.Vector3());
   const maxDim = Math.max(size.x, size.y, size.z);
-  camera.position.copy(
-    center.clone().add(new THREE.Vector3(maxDim, maxDim * 0.8, maxDim))
-  );
+  camera.position.copy(center.clone().add(new THREE.Vector3(maxDim, maxDim * 0.8, maxDim)));
   controls.target.copy(center);
   controls.update();
 
@@ -542,10 +541,10 @@ function renderMetricsPanel(m: MetricsData) {
   html += `<h3 style="margin-top:12px">Per-Rack</h3>`;
   for (const rack of m.racks) {
     const status = rack.inlet_compliant ? "good" : rack.inlet_within_allowable ? "warn" : "bad";
-    const icon = rack.inlet_compliant ? "✓" : rack.inlet_within_allowable ? "⚠" : "✗";
+    const tag = rack.inlet_compliant ? "OK" : rack.inlet_within_allowable ? "WARN" : "FAIL";
     html += `
       <div class="rack-card ${status}">
-        <div class="rack-header">Rack ${rack.rack_index + 1} <span class="rack-status">${icon}</span></div>
+        <div class="rack-header">Rack ${rack.rack_index + 1} <span class="rack-status metric-value ${status}">${tag}</span></div>
         <div class="rack-detail">Intake: ${rack.intake_temp.toFixed(1)} °C</div>
         <div class="rack-detail">Exhaust: ${rack.exhaust_temp.toFixed(1)} °C</div>
         <div class="rack-detail">ΔT: ${rack.delta_t.toFixed(1)} °C</div>
@@ -553,9 +552,9 @@ function renderMetricsPanel(m: MetricsData) {
   }
 
   html += `<h3 style="margin-top:12px">Legend</h3>
-    <div class="legend-item"><div class="legend-dot" style="background:#2ecc71"></div> Recommended (18–27 °C)</div>
-    <div class="legend-item"><div class="legend-dot" style="background:#f39c12"></div> Allowable (15–35 °C)</div>
-    <div class="legend-item"><div class="legend-dot" style="background:#e74c3c"></div> Violation</div>`;
+    <div class="legend-item"><div class="legend-dot" style="background:#1D9E75"></div> Recommended (18–27 °C)</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#E89E4F"></div> Allowable (15–35 °C)</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#E24B4A"></div> Violation</div>`;
 
   metricsPanel.innerHTML = html;
 }
@@ -657,9 +656,7 @@ uploadBtn.addEventListener("click", async () => {
     stageBtns.style.display = "flex";
 
     // Enable/disable semantic button
-    const semBtn = stageBtns.querySelector(
-      '[data-stage="semantic"]'
-    ) as HTMLButtonElement;
+    const semBtn = stageBtns.querySelector('[data-stage="semantic"]') as HTMLButtonElement;
     if (!result.semantic_glb) {
       semBtn.style.opacity = "0.3";
       semBtn.style.pointerEvents = "none";
@@ -669,9 +666,7 @@ uploadBtn.addEventListener("click", async () => {
     }
 
     // Enable/disable voxel button
-    const voxBtn = stageBtns.querySelector(
-      '[data-stage="voxel"]'
-    ) as HTMLButtonElement;
+    const voxBtn = stageBtns.querySelector('[data-stage="voxel"]') as HTMLButtonElement;
     if (!result.voxel_grid) {
       voxBtn.style.opacity = "0.3";
       voxBtn.style.pointerEvents = "none";
@@ -681,9 +676,7 @@ uploadBtn.addEventListener("click", async () => {
     }
 
     // Enable/disable thermal button
-    const thermBtn = stageBtns.querySelector(
-      '[data-stage="thermal"]'
-    ) as HTMLButtonElement;
+    const thermBtn = stageBtns.querySelector('[data-stage="thermal"]') as HTMLButtonElement;
     if (!result.thermal) {
       thermBtn.style.opacity = "0.3";
       thermBtn.style.pointerEvents = "none";
@@ -720,9 +713,7 @@ demoBtn.addEventListener("click", async () => {
 
     stageBtns.style.display = "flex";
 
-    const semBtn = stageBtns.querySelector(
-      '[data-stage="semantic"]'
-    ) as HTMLButtonElement;
+    const semBtn = stageBtns.querySelector('[data-stage="semantic"]') as HTMLButtonElement;
     if (!result.semantic_glb) {
       semBtn.style.opacity = "0.3";
       semBtn.style.pointerEvents = "none";
@@ -731,9 +722,7 @@ demoBtn.addEventListener("click", async () => {
       semBtn.style.pointerEvents = "auto";
     }
 
-    const voxBtn = stageBtns.querySelector(
-      '[data-stage="voxel"]'
-    ) as HTMLButtonElement;
+    const voxBtn = stageBtns.querySelector('[data-stage="voxel"]') as HTMLButtonElement;
     if (!result.voxel_grid) {
       voxBtn.style.opacity = "0.3";
       voxBtn.style.pointerEvents = "none";
@@ -742,9 +731,7 @@ demoBtn.addEventListener("click", async () => {
       voxBtn.style.pointerEvents = "auto";
     }
 
-    const thermBtn = stageBtns.querySelector(
-      '[data-stage="thermal"]'
-    ) as HTMLButtonElement;
+    const thermBtn = stageBtns.querySelector('[data-stage="thermal"]') as HTMLButtonElement;
     if (!result.thermal) {
       thermBtn.style.opacity = "0.3";
       thermBtn.style.pointerEvents = "none";
@@ -753,9 +740,7 @@ demoBtn.addEventListener("click", async () => {
       thermBtn.style.pointerEvents = "auto";
     }
 
-    const ashraeBtn = stageBtns.querySelector(
-      '[data-stage="ashrae"]'
-    ) as HTMLButtonElement;
+    const ashraeBtn = stageBtns.querySelector('[data-stage="ashrae"]') as HTMLButtonElement;
     if (!result.metrics) {
       ashraeBtn.style.opacity = "0.3";
       ashraeBtn.style.pointerEvents = "none";

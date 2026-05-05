@@ -5,93 +5,162 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>HALO — Scan Viewer</title>
     <style>
+      :root {
+        --bg: #FAFAF7;
+        --bg-card: #FDFCF9;
+        --bg-sunken: #F4F2EC;
+        --border: #E8E5DD;
+        --text-1: #2C2C2A;
+        --text-2: #5F5E5A;
+        --text-3: #888780;
+        --success: #1D9E75;
+        --success-bg: #E0F1E8;
+        --success-text: #0F6E56;
+        --warning: #E89E4F;
+        --warning-text: #A86B1A;
+        --danger: #E24B4A;
+        --danger-bg: #FCE8E8;
+        --danger-text: #A32D2D;
+        --info: #378ADD;
+        --info-text: #0C447C;
+      }
       * { margin: 0; padding: 0; box-sizing: border-box; }
       body {
-        font-family: "Pretendard", -apple-system, BlinkMacSystemFont, sans-serif;
-        background: #0a0e17; color: #e0e0e0; height: 100vh; overflow: hidden;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Pretendard",
+          system-ui, sans-serif;
+        background: var(--bg); color: var(--text-1); height: 100vh; overflow: hidden;
+        font-size: 13px; font-weight: 400;
+        font-variant-numeric: tabular-nums;
       }
 
       .header {
         display: flex; align-items: center; justify-content: space-between;
-        padding: 12px 24px; background: #0d1220; border-bottom: 1px solid #1a2744;
+        padding: 12px 20px; background: var(--bg-card);
+        border-bottom: 0.5px solid var(--border);
       }
-      .header h1 { font-size: 18px; font-weight: 700; color: #fff; }
-      .header h1 span { color: #00bcd4; }
+      .header h1 { font-size: 14px; font-weight: 500; color: var(--text-1); }
+      .header h1 span { color: var(--text-2); font-weight: 400; margin-left: 6px; }
+      .header-nav { display: flex; gap: 4px; }
+      .header-nav a {
+        color: var(--text-2); text-decoration: none; font-size: 12px;
+        padding: 6px 12px; border-radius: 6px; border: 0.5px solid transparent;
+      }
+      .header-nav a:hover { color: var(--text-1); background: var(--bg-sunken); }
+      .header-nav a.active {
+        color: var(--text-1); border-color: var(--border); background: var(--bg-sunken);
+      }
 
       .layout {
         display: grid; grid-template-columns: 320px 1fr;
-        height: calc(100vh - 50px);
+        height: calc(100vh - 49px);
       }
 
       /* --- Left Panel --- */
       .panel {
-        background: #0d1220; border-right: 1px solid #1a2744;
-        padding: 20px; overflow-y: auto;
+        background: var(--bg-card); border-right: 0.5px solid var(--border);
+        padding: 16px; overflow-y: auto;
       }
-      .panel h2 { font-size: 14px; color: #00bcd4; margin-bottom: 12px; text-transform: uppercase; letter-spacing: 1px; }
-      .panel label { display: block; font-size: 13px; color: #99aabb; margin-bottom: 6px; }
+      .panel h2 {
+        font-size: 11px; color: var(--text-2); margin-bottom: 10px;
+        text-transform: uppercase; letter-spacing: 0.06em; font-weight: 500;
+      }
+      .panel label {
+        display: block; font-size: 12px; color: var(--text-2); margin-bottom: 4px;
+      }
       .panel input[type="file"],
       .panel textarea {
-        width: 100%; padding: 8px 10px; border: 1px solid #1a2744; border-radius: 6px;
-        background: #111827; color: #e0e0e0; font-size: 13px; font-family: inherit;
-        margin-bottom: 16px;
+        width: 100%; padding: 8px 10px;
+        border: 0.5px solid var(--border); border-radius: 6px;
+        background: var(--bg); color: var(--text-1);
+        font-size: 12px; font-family: inherit;
+        margin-bottom: 14px;
       }
-      .panel textarea { height: 120px; resize: vertical; }
+      .panel textarea {
+        height: 120px; resize: vertical;
+        font-family: ui-monospace, "SF Mono", Menlo, monospace;
+      }
 
       .btn {
-        width: 100%; padding: 10px; border: none; border-radius: 6px;
-        font-size: 14px; font-weight: 600; cursor: pointer; transition: background 0.2s;
+        width: 100%; padding: 9px; border: 0.5px solid var(--border); border-radius: 6px;
+        font-size: 13px; font-weight: 500; cursor: pointer;
+        font-family: inherit; background: var(--bg-card); color: var(--text-1);
       }
-      .btn-primary { background: #00bcd4; color: #000; }
-      .btn-primary:hover { background: #00d4ef; }
-      .btn-primary:disabled { background: #1a2744; color: #556; cursor: not-allowed; }
+      .btn:hover { background: var(--bg-sunken); }
+      .btn-primary {
+        background: var(--text-1); color: var(--bg-card); border-color: var(--text-1);
+      }
+      .btn-primary:hover { background: #1a1a18; color: var(--bg-card); }
+      .btn-primary:disabled {
+        background: var(--bg-sunken); color: var(--text-3);
+        border-color: var(--border); cursor: not-allowed;
+      }
 
-      .stage-btns { display: flex; gap: 8px; margin-top: 20px; }
+      .stage-btns { display: flex; gap: 6px; margin-top: 18px; flex-wrap: wrap; }
       .stage-btn {
-        flex: 1; padding: 8px 4px; border: 1px solid #1a2744; border-radius: 6px;
-        background: #111827; color: #99aabb; font-size: 12px; cursor: pointer;
-        text-align: center; transition: all 0.2s;
+        flex: 1 1 0; min-width: 60px;
+        padding: 7px 4px; border: 0.5px solid var(--border); border-radius: 6px;
+        background: var(--bg-card); color: var(--text-2); font-size: 11px;
+        cursor: pointer; text-align: center; font-family: inherit;
       }
-      .stage-btn.active { border-color: #00bcd4; color: #00bcd4; background: #0d1a2a; }
-      .stage-btn:hover { border-color: #00bcd4; }
+      .stage-btn:hover { background: var(--bg-sunken); color: var(--text-1); }
+      .stage-btn.active {
+        border-color: var(--success); color: var(--success-text);
+        background: var(--success-bg);
+      }
 
-      .status { margin-top: 16px; font-size: 12px; color: #667; min-height: 20px; }
-      .status.error { color: #f44; }
-      .status.success { color: #4c8; }
+      .status {
+        margin-top: 14px; font-size: 11px; color: var(--text-3); min-height: 18px;
+      }
+      .status.error { color: var(--danger-text); }
+      .status.success { color: var(--success-text); }
 
-      .legend { margin-top: 24px; }
-      .legend h3 { font-size: 12px; color: #667; margin-bottom: 8px; }
-      .legend-item { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; font-size: 12px; }
-      .legend-dot { width: 12px; height: 12px; border-radius: 3px; }
+      .legend { margin-top: 20px; }
+      .legend h3 {
+        font-size: 11px; color: var(--text-2); margin-bottom: 8px;
+        text-transform: uppercase; letter-spacing: 0.04em; font-weight: 500;
+      }
+      .legend-item {
+        display: flex; align-items: center; gap: 8px;
+        margin-bottom: 4px; font-size: 11px; color: var(--text-2);
+      }
+      .legend-dot {
+        width: 10px; height: 10px; border-radius: 3px;
+        border: 0.5px solid var(--border);
+      }
 
       /* --- Metrics Panel --- */
       .metrics-panel {
-        margin-top: 20px; padding: 12px; background: #111827;
-        border: 1px solid #1a2744; border-radius: 8px; font-size: 12px;
+        margin-top: 18px; padding: 12px; background: var(--bg-card);
+        border: 0.5px solid var(--border); border-radius: 6px; font-size: 12px;
       }
       .metrics-panel h3 {
-        font-size: 12px; color: #00bcd4; margin-bottom: 8px;
-        text-transform: uppercase; letter-spacing: 0.5px;
+        font-size: 11px; color: var(--text-2); margin-bottom: 8px;
+        text-transform: uppercase; letter-spacing: 0.04em; font-weight: 500;
       }
       .metric-row {
-        display: flex; justify-content: space-between; padding: 3px 0;
-        border-bottom: 1px solid #1a274422;
+        display: flex; justify-content: space-between; padding: 4px 0;
+        border-bottom: 0.5px solid var(--border);
       }
-      .metric-label { color: #99aabb; }
-      .metric-value { font-weight: 600; color: #e0e0e0; }
-      .metric-value.good { color: #2ecc71; }
-      .metric-value.warn { color: #f39c12; }
-      .metric-value.bad { color: #e74c3c; }
+      .metric-row:last-child { border-bottom: 0; }
+      .metric-label { color: var(--text-2); }
+      .metric-value { font-weight: 500; color: var(--text-1); }
+      .metric-value.good { color: var(--success-text); }
+      .metric-value.warn { color: var(--warning-text); }
+      .metric-value.bad { color: var(--danger-text); }
       .rack-card {
         margin: 6px 0; padding: 8px 10px; border-radius: 6px;
-        border-left: 3px solid #555;
+        border-left: 3px solid var(--border);
+        background: var(--bg-card);
+        border-top: 0.5px solid var(--border);
+        border-right: 0.5px solid var(--border);
+        border-bottom: 0.5px solid var(--border);
       }
-      .rack-card.good { border-left-color: #2ecc71; background: #0d1a1a; }
-      .rack-card.warn { border-left-color: #f39c12; background: #1a1a0d; }
-      .rack-card.bad  { border-left-color: #e74c3c; background: #1a0d0d; }
-      .rack-header { font-weight: 600; color: #e0e0e0; margin-bottom: 4px; }
+      .rack-card.good { border-left-color: var(--success); background: var(--success-bg); }
+      .rack-card.warn { border-left-color: var(--warning); background: rgba(232, 158, 79, 0.10); }
+      .rack-card.bad  { border-left-color: var(--danger); background: var(--danger-bg); }
+      .rack-header { font-weight: 500; color: var(--text-1); margin-bottom: 4px; }
       .rack-status { float: right; }
-      .rack-detail { color: #99aabb; font-size: 11px; }
+      .rack-detail { color: var(--text-2); font-size: 11px; }
 
       /* --- 3D Canvas --- */
       #viewer { width: 100%; height: 100%; display: block; }
@@ -100,6 +169,12 @@
   <body>
     <div class="header">
       <h1>HALO <span>Scan Viewer</span></h1>
+      <nav class="header-nav">
+        <a href="./index.html">시나리오</a>
+        <a href="./components.html">컴포넌트</a>
+        <a href="./dashboard.html">대시보드</a>
+        <a href="./scan.html" class="active">스캔</a>
+      </nav>
     </div>
 
     <div class="layout">
@@ -116,33 +191,33 @@
   "human_workspaces": [{"x": 5, "y": 3, "z": 0}]
 }'></textarea>
 
-        <button class="btn btn-primary" id="upload-btn">Process Scan</button>
+        <button type="button" class="btn btn-primary" id="upload-btn">Process Scan</button>
         <div class="status" id="status"></div>
 
         <div class="stage-btns" id="stage-btns" style="display:none;">
-          <button class="stage-btn active" data-stage="raw">Raw</button>
-          <button class="stage-btn" data-stage="cleaned">Cleaned</button>
-          <button class="stage-btn" data-stage="semantic">Semantic</button>
-          <button class="stage-btn" data-stage="voxel">Voxel Grid</button>
-          <button class="stage-btn" data-stage="thermal">Thermal</button>
-          <button class="stage-btn" data-stage="ashrae">ASHRAE</button>
+          <button type="button" class="stage-btn active" data-stage="raw">Raw</button>
+          <button type="button" class="stage-btn" data-stage="cleaned">Cleaned</button>
+          <button type="button" class="stage-btn" data-stage="semantic">Semantic</button>
+          <button type="button" class="stage-btn" data-stage="voxel">Voxel</button>
+          <button type="button" class="stage-btn" data-stage="thermal">Thermal</button>
+          <button type="button" class="stage-btn" data-stage="ashrae">ASHRAE</button>
         </div>
 
         <div class="legend" id="legend" style="display:none;">
           <h3>Semantic Colors</h3>
-          <div class="legend-item"><div class="legend-dot" style="background:#b4b4b4"></div> Wall / Obstacle</div>
-          <div class="legend-item"><div class="legend-dot" style="background:#e63c3c"></div> Legacy Server (heat)</div>
-          <div class="legend-item"><div class="legend-dot" style="background:#3c8ce6"></div> AC Vent (cooling)</div>
-          <div class="legend-item"><div class="legend-dot" style="background:#3cc864"></div> Human Workspace</div>
-          <div class="legend-item"><div class="legend-dot" style="background:#555555"></div> Rack Body</div>
-          <div class="legend-item"><div class="legend-dot" style="background:#00bcd4"></div> Rack Intake</div>
-          <div class="legend-item"><div class="legend-dot" style="background:#ff9800"></div> Rack Exhaust</div>
+          <div class="legend-item"><div class="legend-dot" style="background:#B4B2A9"></div> Wall / Obstacle</div>
+          <div class="legend-item"><div class="legend-dot" style="background:#E24B4A"></div> Legacy Server (heat)</div>
+          <div class="legend-item"><div class="legend-dot" style="background:#378ADD"></div> AC Vent (cooling)</div>
+          <div class="legend-item"><div class="legend-dot" style="background:#1D9E75"></div> Human Workspace</div>
+          <div class="legend-item"><div class="legend-dot" style="background:#888780"></div> Rack Body</div>
+          <div class="legend-item"><div class="legend-dot" style="background:#378ADD"></div> Rack Intake</div>
+          <div class="legend-item"><div class="legend-dot" style="background:#E89E4F"></div> Rack Exhaust</div>
         </div>
 
         <div class="metrics-panel" id="metrics-panel" style="display:none;"></div>
 
-        <div id="demo-section" style="margin-top: 24px; border-top: 1px solid #1a2744; padding-top: 16px;">
-          <button class="btn btn-primary" id="demo-btn" style="background: #1a2744; color: #00bcd4;">Load Demo Room</button>
+        <div id="demo-section" style="margin-top: 20px; border-top: 0.5px solid var(--border); padding-top: 16px;">
+          <button type="button" class="btn" id="demo-btn">Load Demo Room</button>
         </div>
       </div>
 
