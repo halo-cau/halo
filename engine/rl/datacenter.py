@@ -4,6 +4,63 @@ from gymnasium import spaces
 import scipy.ndimage
 
 
+# ---------------------------------------------------------------------------
+# Shared ASHRAE reward formula (used by both fast-2D and engine-3D paths)
+# ---------------------------------------------------------------------------
+
+def _ashrae_reward_from_metrics(metrics) -> float:
+    """Compute the ASHRAE TC 9.9 reward from a MetricsResult object.
+
+    This is the canonical reward formula shared by both the fast 2-D path
+    (which approximates intakes/exhausts from adjacent cells) and the
+    authoritative 3-D engine path (which runs the full physics solver).
+    Keeping it in one place ensures both paths produce comparable signals.
+
+    Returns a scalar reward:
+        - ~ +3.5 for an ideal layout (all racks compliant, good airflow)
+        - ~  0   for a mediocre layout
+        - ~ −5   for a layout with widespread allowable violations
+    """
+    intakes  = np.array([r.intake_temp  for r in metrics.racks])
+    exhausts = np.array([r.exhaust_temp for r in metrics.racks])
+    dts      = exhausts - intakes
+
+    # ASHRAE compliance fractions
+    s_rec   = float(np.mean((intakes >= 18.0) & (intakes <= 27.0)))
+    s_allow = float(np.mean((intakes >= 15.0) & (intakes <= 35.0)))
+
+    # Magnitude of allowable violations (per rack, normalised to 10 °C band)
+    p_allow = float(np.mean(
+        np.maximum(intakes - 35.0, 0.0) + np.maximum(15.0 - intakes, 0.0)
+    ) / 10.0)
+
+    # Delta-T health: ideal 6–20 °C; penalise outside that band
+    p_dt = float(np.mean(
+        np.maximum(6.0 - dts,  0.0) / 6.0
+        + np.maximum(dts - 20.0, 0.0) / 10.0
+    ))
+
+    # RCI-style score from room vertical profile
+    vp = np.array(metrics.room.vertical_profile)
+    rci_hi_viol = float(np.mean(np.maximum(vp - 27.0, 0.0)) / 8.0)
+    rci_lo_viol = float(np.mean(np.maximum(15.0 - vp, 0.0)) / 5.0)
+    s_rci = 1.0 - 0.5 * (rci_hi_viol + rci_lo_viol)
+
+    # Thermal stratification penalty (95th – 5th percentile spread > 6 °C)
+    spread  = float(np.percentile(vp, 95) - np.percentile(vp, 5))
+    p_strat = max(0.0, (spread - 6.0) / 8.0)
+
+    base = (
+        2.0 * s_rec
+        + 1.5 * s_rci
+        - 3.0 * p_allow
+        - 0.8 * p_dt
+        - 0.5 * p_strat
+    )
+    gate = -2.0 * (1.0 - s_allow)
+    return float(base + gate)
+
+
 class DataCenterEnv(gym.Env):
     def __init__(self, grid_size=50, rack_num=10, num_cooler=3):
         super().__init__()
@@ -25,6 +82,13 @@ class DataCenterEnv(gym.Env):
 
         self.diff_sigma = 0.3
         self.cool_decay = 6.0
+
+        # ── Thermal engine bridge ─────────────────────────────────────────
+        # The authoritative 3-D thermal solver is invoked once per episode
+        # (when done=True) to compute the final ASHRAE reward.
+        # The 2-D field (self.temp) is still maintained for the observation.
+        from engine.rl.thermal_bridge import ThermalBridge
+        self._bridge = ThermalBridge(grid_size=grid_size)
 
         self.action_space = spaces.Discrete(grid_size * grid_size * 4)
 
@@ -66,8 +130,17 @@ class DataCenterEnv(gym.Env):
         self.step_count += 1
 
         self._update_temp()
-        reward = self._compute_reward()
         done = self.step_count >= self.rack_num
+
+        if done:
+            # Episode end: run the 3-D thermal engine once for the final reward
+            metrics = self._bridge.solve_metrics(
+                self.rack_map, self.rack_dir, self.obstacle, self.cooling_pos,
+            )
+            reward = _ashrae_reward_from_metrics(metrics) if metrics is not None else 0.0
+        else:
+            # Mid-episode: lightweight position shaping (no thermal solve)
+            reward = self._position_shaping_reward()
 
         return self._get_obs(), reward, done, False, {}
 
@@ -191,36 +264,48 @@ class DataCenterEnv(gym.Env):
 
         return temp
 
-    def _compute_reward(self):
-        T = self.temp
+    def _position_shaping_reward(self) -> float:
+        """Lightweight per-step shaping reward (no thermal solve).
 
-        real_T = 15 + T * 4
+        Signals two layout quality proxies that are cheap to compute:
 
-        rec = np.logical_and(real_T >= 18, real_T <= 27)
-        C_rec = np.mean(rec)
+        1. Hot-/cold-aisle alignment — if any of the four orthogonal
+           neighbours already has a rack, reward racks whose exhaust faces
+           away from that neighbour's exhaust (back-to-back hot-aisle) and
+           penalise intake-to-intake pairings (cold-aisle clash).
 
-        violation = np.maximum(0, real_T - 32)
-        V = np.sum(violation)
+        2. Placement bonus — a fixed small positive for each valid placement
+           to keep the reward from being dominated by violations alone.
 
-        H = np.max(real_T)
+        The total shaping reward is intentionally small (|r| < 0.5) so it
+        does not overwhelm the terminal ASHRAE reward.
+        """
+        racks = np.argwhere(self.rack_map == 1)
+        if len(racks) == 0:
+            return 0.0
 
-        energy = np.mean(T)
+        x, y = racks[-1]   # the rack just placed
+        dirs = np.array([(1, 0), (-1, 0), (0, 1), (0, -1)])
+        my_dir = int(self.rack_dir[x, y])
+        my_exhaust = dirs[my_dir]   # unit vector: direction exhaust blows
 
-        reward = 10 * C_rec - 0.2 * V - 0.3 * max(0, H - 27) - 0.05 * energy
+        # ── 1. Hot-/cold-aisle alignment ───────────────────────────────────────
+        r_aisle = 0.0
+        neighbour_offsets = [(1, 0), (-1, 0), (0, 1), (0, -1)]
+        for ox, oy in neighbour_offsets:
+            nx, ny = x + ox, y + oy
+            if 0 <= nx < self.grid_size and 0 <= ny < self.grid_size:
+                if self.rack_map[nx, ny] == 1:
+                    nb_exhaust = dirs[int(self.rack_dir[nx, ny])]
+                    dot = float(my_exhaust @ nb_exhaust)
+                    # exhausts pointing same direction (+1): hot-aisle alignment
+                    # exhausts pointing toward each other (dot≈-1): intake clash
+                    r_aisle += 0.05 * dot
 
-        rack_positions = np.argwhere(self.rack_map == 1)
+        # ── 2. Placement bonus ────────────────────────────────────────────
+        r_place = 0.05
 
-        if len(rack_positions) > 1:
-            dists = np.linalg.norm(
-                rack_positions[:, None] - rack_positions[None, :], axis=-1
-            )
-            spread = np.mean(dists)
-        else:
-            spread = 0
-
-        reward += -0.1 * spread
-
-        return reward
+        return float(r_aisle + r_place)
 
     def _cooling_dist_map(self):
         dist = np.sqrt(
