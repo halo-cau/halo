@@ -161,7 +161,7 @@ export const randomPlacement: SceneGraph = {
     {
       id: "cooling_01",
       category: "cooling_unit",
-      label: "냉각 장치 A (CRAC)",
+      label: "천장형 에어컨 A",
       position: [1.0, 0, 5.0],
       rotation: [0, 0, 0],
       size: [1.0, 2.2, 0.8],
@@ -172,7 +172,7 @@ export const randomPlacement: SceneGraph = {
     {
       id: "cooling_02",
       category: "cooling_unit",
-      label: "냉각 장치 B (CRAC)",
+      label: "천장형 에어컨 B",
       position: [11.0, 0, 6.5],
       rotation: [0, -60, 0],
       size: [1.0, 2.2, 0.8],
@@ -189,28 +189,6 @@ export const randomPlacement: SceneGraph = {
       size: [0.8, 1.5, 0.6],
       color: "#E65100",
       heatOutput: 2,
-      relations: [],
-    },
-    {
-      id: "pdu_01",
-      category: "pdu",
-      label: "PDU 분전반",
-      position: [4.5, 0, 3.5],
-      rotation: [0, 0, 0],
-      size: [0.4, 1.8, 0.3],
-      color: "#F57C00",
-      heatOutput: 1,
-      relations: [],
-    },
-    {
-      id: "monitor_01",
-      category: "monitoring",
-      label: "환경 모니터링 장비",
-      position: [6.0, 0, 8.0],
-      rotation: [0, 180, 0],
-      size: [0.5, 1.2, 0.4],
-      color: "#7B1FA2",
-      heatOutput: 0.5,
       relations: [],
     },
     {
@@ -318,7 +296,7 @@ export const ruleBasedPlacement: SceneGraph = {
     {
       id: "cooling_01",
       category: "cooling_unit",
-      label: "냉각 장치 A (CRAC)",
+      label: "천장형 에어컨 A",
       position: [0.8, 0, 4.5],
       rotation: [0, 90, 0],
       size: [1.0, 2.2, 0.8],
@@ -329,7 +307,7 @@ export const ruleBasedPlacement: SceneGraph = {
     {
       id: "cooling_02",
       category: "cooling_unit",
-      label: "냉각 장치 B (CRAC)",
+      label: "천장형 에어컨 B",
       position: [11.0, 0, 4.5],
       rotation: [0, -90, 0],
       size: [1.0, 2.2, 0.8],
@@ -346,28 +324,6 @@ export const ruleBasedPlacement: SceneGraph = {
       size: [0.8, 1.5, 0.6],
       color: "#E65100",
       heatOutput: 2,
-      relations: [{ type: "adjacent_to", target: "pdu_01" }],
-    },
-    {
-      id: "pdu_01",
-      category: "pdu",
-      label: "PDU 분전반",
-      position: [10.0, 0, 3.0],
-      rotation: [0, 0, 0],
-      size: [0.4, 1.8, 0.3],
-      color: "#F57C00",
-      heatOutput: 1,
-      relations: [{ type: "adjacent_to", target: "ups_01" }],
-    },
-    {
-      id: "monitor_01",
-      category: "monitoring",
-      label: "환경 모니터링 장비",
-      position: [6.0, 0, 8.0],
-      rotation: [0, 0, 0],
-      size: [0.5, 1.2, 0.4],
-      color: "#7B1FA2",
-      heatOutput: 0.5,
       relations: [],
     },
     {
@@ -396,81 +352,91 @@ export const ruleBasedPlacement: SceneGraph = {
 };
 
 // ===== Stage 3: RL 최적화 (PPO) =====
+// Hot Aisle Containment 패턴: 모든 서버 랙의 배기 면을 외벽(북쪽 / 남쪽)에
+// 붙여 핫존을 벽-랙 사이 좁은 띠에 가두고, 중앙은 단일 콜드 풀로 운영.
+// 고발열 GPU 랙(15·12 kW)은 메인 AC 두 대 사이 북쪽 벽에 집중.
 export const rlOptimizedPlacement: SceneGraph = {
   id: "rl_ppo_v1",
   name: "RL 최적화 배치 (PPO)",
   description:
-    "강화학습으로 열 분포 최적화. Hot/Cold Aisle 최적 구성, 고발열 GPU 랙을 냉각 장치 인근에 배치, 케이블 경로 최소화.",
+    "강화학습이 Hot Aisle Containment 패턴을 발견 — 5개 랙 배기를 모두 외벽으로 향하게 배치해 핫존을 벽-랙 사이 좁은 띠에 가두고, 중앙은 단일 콜드 풀로 운영. 고발열 GPU 랙을 북쪽 벽에 모아 양쪽 메인 AC가 직접 흡입을 공급.",
   room: SERVER_ROOM,
   furniture: [
+    // ── 북쪽 벽 (3 rack): rotation 0 → intake faces +Z (room center),
+    //    exhaust faces -Z (north wall at z=0). Hot strip = z ∈ [0, 1.0).
     {
       id: "rack_01",
       category: "server_rack",
       label: "서버 랙 A (GPU)",
-      position: [4.0, 0, 2.5],
+      position: [3.0, 0, 1.0],
       rotation: [0, 0, 0],
       size: [0.6, 2.0, 1.0],
       color: "#37474F",
       heatOutput: 15,
       relations: [
         { type: "hot_aisle", target: "rack_02" },
-        { type: "cold_aisle", target: "rack_04" },
+        { type: "cold_aisle", target: "rack_03" },
       ],
     },
     {
       id: "rack_02",
       category: "server_rack",
       label: "서버 랙 B (GPU)",
-      position: [4.0, 0, 4.5],
-      rotation: [0, 180, 0],
+      position: [6.0, 0, 1.0],
+      rotation: [0, 0, 0],
       size: [0.6, 2.0, 1.0],
       color: "#455A64",
       heatOutput: 12,
       relations: [
         { type: "hot_aisle", target: "rack_01" },
-        { type: "cold_aisle", target: "rack_03" },
-      ],
-    },
-    {
-      id: "rack_03",
-      category: "server_rack",
-      label: "서버 랙 C (Storage)",
-      position: [4.0, 0, 6.5],
-      rotation: [0, 0, 0],
-      size: [0.6, 2.0, 1.0],
-      color: "#37474F",
-      heatOutput: 5,
-      relations: [
-        { type: "cold_aisle", target: "rack_02" },
-        { type: "cable_connected", target: "core_switch" },
+        { type: "hot_aisle", target: "rack_04" },
+        { type: "cold_aisle", target: "rack_05" },
       ],
     },
     {
       id: "rack_04",
       category: "server_rack",
       label: "서버 랙 D (CPU)",
-      position: [8.0, 0, 2.5],
+      position: [9.0, 0, 1.0],
       rotation: [0, 0, 0],
       size: [0.6, 2.0, 1.0],
       color: "#455A64",
       heatOutput: 10,
       relations: [
-        { type: "cold_aisle", target: "rack_01" },
+        { type: "hot_aisle", target: "rack_02" },
+        { type: "cold_aisle", target: "rack_05" },
+      ],
+    },
+    // ── 남쪽 벽 (2 rack): rotation 180 → intake faces -Z (room center),
+    //    exhaust faces +Z (south wall at z=9). Hot strip = z ∈ (8.0, 9.0].
+    {
+      id: "rack_03",
+      category: "server_rack",
+      label: "서버 랙 C (Storage)",
+      position: [4.0, 0, 8.0],
+      rotation: [0, 180, 0],
+      size: [0.6, 2.0, 1.0],
+      color: "#37474F",
+      heatOutput: 5,
+      relations: [
         { type: "hot_aisle", target: "rack_05" },
+        { type: "cold_aisle", target: "rack_01" },
+        { type: "cable_connected", target: "core_switch" },
       ],
     },
     {
       id: "rack_05",
       category: "server_rack",
       label: "서버 랙 E (CPU)",
-      position: [8.0, 0, 4.5],
+      position: [8.0, 0, 8.0],
       rotation: [0, 180, 0],
       size: [0.6, 2.0, 1.0],
       color: "#37474F",
       heatOutput: 8,
       relations: [
-        { type: "hot_aisle", target: "rack_04" },
-        { type: "cold_aisle", target: "rack_03" },
+        { type: "hot_aisle", target: "rack_03" },
+        { type: "cold_aisle", target: "rack_02" },
+        { type: "cold_aisle", target: "rack_04" },
         { type: "cable_connected", target: "core_switch" },
       ],
     },
@@ -478,8 +444,8 @@ export const rlOptimizedPlacement: SceneGraph = {
       id: "core_switch",
       category: "network_switch",
       label: "코어 스위치",
-      position: [6.0, 0, 1.5],
-      rotation: [0, 0, 0],
+      position: [11.0, 0, 4.5],
+      rotation: [0, -90, 0],
       size: [0.6, 1.8, 0.8],
       color: "#1565C0",
       heatOutput: 3,
@@ -490,26 +456,27 @@ export const rlOptimizedPlacement: SceneGraph = {
         { type: "cable_connected", target: "rack_05" },
       ],
     },
+    // ── 중앙 콜드 풀 (z ≈ 4.5): AC가 모든 랙 흡입 면에 직접 cold air 공급
     {
       id: "cooling_01",
       category: "cooling_unit",
-      label: "냉각 장치 A (CRAC)",
-      position: [1.0, 0, 3.5],
-      rotation: [0, 90, 0],
+      label: "천장형 에어컨 A",
+      position: [2.0, 0, 4.5],
+      rotation: [0, 0, 0],
       size: [1.0, 2.2, 0.8],
       color: "#0097A7",
       heatOutput: 0,
       relations: [
         { type: "cooling_serves", target: "rack_01" },
-        { type: "cooling_serves", target: "rack_02" },
+        { type: "cooling_serves", target: "rack_03" },
       ],
     },
     {
       id: "cooling_02",
       category: "cooling_unit",
-      label: "냉각 장치 B (CRAC)",
-      position: [11.0, 0, 3.5],
-      rotation: [0, -90, 0],
+      label: "천장형 에어컨 B",
+      position: [10.0, 0, 4.5],
+      rotation: [0, 0, 0],
       size: [1.0, 2.2, 0.8],
       color: "#00838F",
       heatOutput: 0,
@@ -521,60 +488,33 @@ export const rlOptimizedPlacement: SceneGraph = {
     {
       id: "cooling_03",
       category: "cooling_unit",
-      label: "냉각 장치 C (보조)",
-      position: [6.0, 0, 7.5],
+      label: "천장형 에어컨 C (보조)",
+      position: [6.0, 0, 4.5],
       rotation: [0, 0, 0],
       size: [0.8, 2.0, 0.6],
       color: "#00ACC1",
       heatOutput: 0,
-      relations: [{ type: "cooling_serves", target: "rack_03" }],
+      relations: [{ type: "cooling_serves", target: "rack_02" }],
     },
     {
       id: "ups_01",
       category: "ups",
       label: "UPS 전원 장치",
-      position: [10.5, 0, 1.0],
+      position: [11.0, 0, 8.0],
       rotation: [0, -90, 0],
       size: [0.8, 1.5, 0.6],
       color: "#E65100",
       heatOutput: 2,
-      relations: [
-        { type: "adjacent_to", target: "pdu_01" },
-        { type: "grouped_with", target: "pdu_01" },
-      ],
-    },
-    {
-      id: "pdu_01",
-      category: "pdu",
-      label: "PDU 분전반",
-      position: [10.5, 0, 2.5],
-      rotation: [0, -90, 0],
-      size: [0.4, 1.8, 0.3],
-      color: "#F57C00",
-      heatOutput: 1,
-      relations: [
-        { type: "adjacent_to", target: "ups_01" },
-        { type: "grouped_with", target: "ups_01" },
-      ],
-    },
-    {
-      id: "monitor_01",
-      category: "monitoring",
-      label: "환경 모니터링 장비",
-      position: [1.5, 0, 8.0],
-      rotation: [0, 0, 0],
-      size: [0.5, 1.2, 0.4],
-      color: "#7B1FA2",
-      heatOutput: 0.5,
       relations: [],
     },
+    // 케이블 트레이는 콜드 풀과 양쪽 랙 행 사이 통로 따라 주행
     {
       id: "cable_tray_01",
       category: "cable_tray",
-      label: "케이블 트레이 (메인)",
-      position: [6.0, 0, 2.5],
+      label: "케이블 트레이 (북측)",
+      position: [6.0, 0, 2.6],
       rotation: [0, 0, 0],
-      size: [4.5, 0.1, 0.4],
+      size: [7.0, 0.1, 0.4],
       color: "#FDD835",
       heatOutput: 0,
       relations: [{ type: "cable_connected", target: "core_switch" }],
@@ -582,10 +522,10 @@ export const rlOptimizedPlacement: SceneGraph = {
     {
       id: "cable_tray_02",
       category: "cable_tray",
-      label: "케이블 트레이 (보조)",
-      position: [6.0, 0, 4.5],
+      label: "케이블 트레이 (남측)",
+      position: [6.0, 0, 6.6],
       rotation: [0, 0, 0],
-      size: [4.5, 0.1, 0.4],
+      size: [5.0, 0.1, 0.4],
       color: "#F9A825",
       heatOutput: 0,
       relations: [{ type: "cable_connected", target: "cable_tray_01" }],
@@ -614,7 +554,7 @@ export const trainingHistory = {
   },
 };
 
-export const allScenes: SceneGraph[] = [randomPlacement, ruleBasedPlacement, rlOptimizedPlacement];
+export const allScenes: SceneGraph[] = [randomPlacement, rlOptimizedPlacement];
 
 // ===== 시간대별 서버 부하 프로파일 (24시간) =====
 // 각 시간(0~23)에 대한 부하 계수 (0.0 ~ 1.0)
@@ -638,16 +578,19 @@ export function getLoadFactor(hour: number): number {
 }
 
 // 배치별 peak time 냉각 에너지 (kW) — 배치 품질에 따라 다름
-// random: 비효율적 → 냉각 에너지 높음, RL: 효율적 → 냉각 에너지 낮음
+// IT 부하 합계 ≈ 55 kW 기준으로 PUE 1.3~1.9 범위에 들어오게 보정.
+// random: 비효율적 (PUE ~1.9), RL: 효율적 (PUE ~1.3)
 export const coolingEnergyBase: Record<string, number> = {
-  random_v1: 42, // kW (비효율)
-  rule_v1: 30, // kW (중간)
-  rl_ppo_v1: 18, // kW (효율적, ~40% 절감)
+  random_v1: 50, // kW (비효율, PUE ≈ 1.91)
+  rule_v1: 28, // kW (개선, PUE ≈ 1.51)
+  rl_ppo_v1: 16, // kW (효율적, PUE ≈ 1.29)
 };
 
-// 배치별 peak time 최고 온도 (°C)
+// 배치별 peak time 최고 흡입 온도 (°C)
+// ASHRAE TC 9.9: 권장 18~27°C, 허용 15~35°C.
+// random: 허용 상한 근처(핫스팟), RL: 권장 범위 내.
 export const peakTempBase: Record<string, number> = {
-  random_v1: 48, // 핫스팟 심각
-  rule_v1: 38, // 개선되었지만 미흡
-  rl_ppo_v1: 29, // 균등 분포
+  random_v1: 35, // 허용 상한 (핫스팟 위험)
+  rule_v1: 30, // 권장 초과 (허용 범위 내)
+  rl_ppo_v1: 25, // 권장 범위 (안정)
 };

@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>HALO — Cooling Dashboard</title>
+    <style>
+      :root {
+        --bg: #FAFAF7;
+        --bg-card: #FDFCF9;
+        --bg-sunken: #F4F2EC;
+        --border: #E8E5DD;
+        --text-1: #2C2C2A;
+        --text-2: #5F5E5A;
+        --text-3: #888780;
+        --rack-gray: #B4B2A9;
+        --success: #1D9E75;
+        --success-bg: #E0F1E8;
+        --success-text: #0F6E56;
+        --info: #378ADD;
+        --info-text: #0C447C;
+        --warning: #E89E4F;
+        --warning-text: #A86B1A;
+        --danger: #E24B4A;
+        --danger-bg: #FCE8E8;
+        --danger-text: #A32D2D;
+      }
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body { height: 100vh; overflow: hidden; }
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Pretendard",
+          system-ui, sans-serif;
+        background: var(--bg); color: var(--text-1);
+        font-size: 13px; font-weight: 400;
+        font-variant-numeric: tabular-nums;
+        display: flex; flex-direction: column;
+      }
+
+      /* === Top header === */
+      .header {
+        display: flex; align-items: center; justify-content: space-between;
+        padding: 10px 20px; background: var(--bg-card);
+        border-bottom: 0.5px solid var(--border);
+        flex: none;
+      }
+      .header h1 { font-size: 14px; font-weight: 500; color: var(--text-1); }
+      .header h1 span { color: var(--text-1); font-weight: 500; }
+      .header h1 .bar { color: var(--text-3); margin: 0 8px; font-weight: 400; }
+      .header-nav { display: flex; gap: 4px; }
+      .header-nav a {
+        color: var(--text-2); text-decoration: none; font-size: 12px;
+        padding: 6px 12px; border-radius: 6px; border: 0.5px solid transparent;
+      }
+      .header-nav a:hover { color: var(--text-1); background: var(--bg-sunken); }
+      .header-nav a.active {
+        color: var(--text-1); border-color: var(--border); background: var(--bg-sunken);
+      }
+
+      .page {
+        padding: 12px 20px;
+        max-width: 1400px;
+        margin: 0 auto;
+        width: 100%;
+        flex: 1;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+
+      /* === Scene picker === */
+      .scene-picker { display: flex; gap: 8px; flex-wrap: wrap; flex: none; }
+      .scene-btn {
+        padding: 8px 14px; background: var(--bg-card); border: 0.5px solid var(--border);
+        color: var(--text-2); font-size: 12px; border-radius: 6px; cursor: pointer;
+        font-family: inherit; text-align: left;
+      }
+      .scene-btn:hover { background: var(--bg-sunken); color: var(--text-1); }
+      .scene-btn.active {
+        border-color: var(--success); color: var(--success-text);
+        background: var(--success-bg);
+      }
+      .scene-btn .scene-meta {
+        display: block; font-size: 10px; color: var(--text-3); margin-top: 2px;
+      }
+      .scene-btn.active .scene-meta { color: var(--success-text); opacity: 0.85; }
+
+      /* === Status bar === */
+      .status-bar {
+        background: var(--bg-card); border: 0.5px solid var(--border); border-radius: 8px;
+        padding: 10px 14px; display: flex; justify-content: space-between;
+        align-items: center; gap: 12px; flex: none;
+      }
+      .status-bar .status-left { display: flex; align-items: center; gap: 12px; }
+      .status-dot { width: 10px; height: 10px; border-radius: 50%; }
+      .status-bar p.title {
+        font-size: 13px; font-weight: 500; margin: 0; color: var(--text-1);
+      }
+      .status-bar p.sub { font-size: 11px; color: var(--text-2); margin: 2px 0 0; }
+      .status-bar .status-meta {
+        font-size: 11px; color: var(--text-3); text-align: right;
+      }
+
+      /* === KPI cards === */
+      .kpi-grid {
+        display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px;
+        flex: none;
+      }
+      .kpi-card {
+        background: var(--bg-card); border: 0.5px solid var(--border); border-radius: 8px;
+        padding: 10px 12px;
+      }
+      .kpi-card .lbl { font-size: 11px; color: var(--text-2); margin-bottom: 6px; }
+      .kpi-card .val {
+        font-size: 22px; font-weight: 500; margin: 0;
+        line-height: 1.1; color: var(--text-1);
+      }
+      .kpi-card .val .unit {
+        font-size: 12px; color: var(--text-3); font-weight: 400; margin-left: 2px;
+      }
+      .kpi-card .sub { font-size: 10px; color: var(--text-3); margin-top: 6px; }
+      .kpi-card .sub.good { color: var(--success-text); }
+      .kpi-card .sub.warn { color: var(--warning-text); }
+      .kpi-card .sub.bad { color: var(--danger-text); }
+
+      .kpi-bar {
+        height: 3px; background: var(--bg-sunken);
+        border-radius: 2px; overflow: hidden; margin-top: 8px;
+      }
+      .kpi-bar > div { height: 100%; transition: width 0.4s; }
+
+      .kpi-pips { display: flex; gap: 3px; margin-top: 8px; }
+      .kpi-pips > div { flex: 1; height: 3px; border-radius: 1px; }
+
+      /* === Main grid: heatmap + timeseries + side info column === */
+      .main-grid {
+        display: grid;
+        grid-template-columns: 1.4fr 1fr 0.95fr;
+        gap: 8px;
+        flex: 1;
+        min-height: 0;
+      }
+      .side-col {
+        display: flex; flex-direction: column; gap: 8px; min-height: 0;
+      }
+      .panel-card {
+        background: var(--bg-card); border: 0.5px solid var(--border); border-radius: 8px;
+        overflow: hidden;
+        display: flex; flex-direction: column;
+        min-height: 0;
+      }
+      .panel-head {
+        padding: 8px 12px; border-bottom: 0.5px solid var(--border);
+        display: flex; justify-content: space-between; align-items: center;
+        flex: none;
+      }
+      .panel-head .ttl { font-size: 12px; font-weight: 500; color: var(--text-1); }
+      .panel-head .sub { font-size: 10px; color: var(--text-3); margin-top: 2px; }
+      .panel-head .tabs { display: flex; gap: 4px; }
+      .panel-head .tabs span {
+        font-size: 10px; padding: 2px 8px; border-radius: 4px;
+        background: var(--bg-sunken); color: var(--text-2);
+        border: 0.5px solid var(--border);
+      }
+      .panel-head .tabs span.muted {
+        background: transparent; color: var(--text-3); border-color: transparent;
+      }
+
+      svg.floor {
+        display: block; width: 100%; height: 100%; background: var(--bg-card);
+        flex: 1; min-height: 0;
+      }
+      .ts-chart {
+        width: 100%; flex: 1; min-height: 0; background: var(--bg-card);
+      }
+
+      /* Compliance summary card replaces the rack-detail table */
+      .comp-card {
+        background: var(--bg-card); border: 0.5px solid var(--border); border-radius: 8px;
+        padding: 10px 14px;
+        flex: 1; min-height: 0; overflow: auto;
+      }
+      .comp-card h3 {
+        font-size: 11px; color: var(--text-2); letter-spacing: 0.04em;
+        text-transform: uppercase; font-weight: 500; margin-bottom: 6px;
+      }
+      .comp-row {
+        display: grid; grid-template-columns: 1fr auto; gap: 8px;
+        padding: 5px 0; border-bottom: 0.5px solid var(--border); align-items: center;
+      }
+      .comp-row:last-child { border-bottom: 0; }
+      .comp-row .l { font-size: 12px; color: var(--text-1); }
+      .comp-row .l small {
+        display: block; font-size: 10px; color: var(--text-3); margin-top: 2px;
+      }
+      .comp-row .v {
+        font-size: 14px; font-weight: 500;
+      }
+
+      .savings-card {
+        background: var(--bg-card);
+        border: 0.5px solid var(--border); border-radius: 8px; padding: 10px 14px;
+        flex: 1; min-height: 0; overflow: auto;
+      }
+      .savings-card .savings-lbl {
+        font-size: 11px; color: var(--text-2); font-weight: 500;
+      }
+      .savings-card .savings-val {
+        font-size: 22px; font-weight: 500; color: var(--success-text); margin: 4px 0;
+      }
+      .savings-card.baseline .savings-val { color: var(--text-1); }
+      .savings-card .savings-sub {
+        font-size: 11px; color: var(--text-2); margin-bottom: 8px;
+      }
+      .savings-card hr {
+        border: 0; height: 0.5px; background: var(--border); margin: 8px 0;
+      }
+      .savings-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+      .savings-grid .item .lbl { font-size: 10px; color: var(--text-2); }
+      .savings-grid .item .v {
+        font-size: 16px; font-weight: 500; color: var(--text-1); margin-top: 2px;
+      }
+
+      @media (max-width: 1100px) {
+        html, body { height: auto; overflow: auto; }
+        .kpi-grid { grid-template-columns: 1fr 1fr; }
+        .main-grid { grid-template-columns: 1fr; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="header">
+      <h1><span>HALO</span><span class="bar">|</span>Cooling Dashboard</h1>
+      <nav class="header-nav">
+        <a href="./index.html">시나리오</a>
+        <a href="./components.html">컴포넌트</a>
+        <a href="./dashboard.html" class="active">대시보드</a>
+        <a href="./scan.html">스캔</a>
+      </nav>
+    </div>
+
+    <div class="page">
+      <div class="scene-picker" id="scene-picker"></div>
+
+      <!-- Top status bar -->
+      <div class="status-bar" id="status-bar"></div>
+
+      <!-- KPI cards -->
+      <div class="kpi-grid" id="kpi-grid"></div>
+
+      <!-- Heatmap floor plan + 24h time series + ASHRAE/savings sidebar -->
+      <div class="main-grid">
+        <div class="panel-card">
+          <div class="panel-head">
+            <div>
+              <div class="ttl">랙별 흡입 온도 분포 (평면도)</div>
+            </div>
+            <div class="tabs">
+              <span>실측</span>
+              <span class="muted">CFD</span>
+            </div>
+          </div>
+          <svg class="floor" id="floor-svg" viewBox="0 0 480 280" preserveAspectRatio="xMidYMid meet" role="img" aria-labelledby="floor-svg-title"><title id="floor-svg-title">랙별 흡입 온도 분포 평면도</title></svg>
+        </div>
+
+        <div class="panel-card">
+          <div class="panel-head">
+            <div>
+              <div class="ttl">24시간 추이</div>
+              <div class="sub">최고 흡입 온도 vs 외기</div>
+            </div>
+          </div>
+          <div class="ts-chart" id="ts-chart"></div>
+        </div>
+
+        <div class="side-col">
+          <div class="comp-card" id="comp-card"></div>
+          <div class="savings-card" id="savings-card"></div>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="/src/dashboard.ts"></script>
+  </body>
+</html>

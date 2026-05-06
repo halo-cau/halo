@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>HALO — Scan Viewer</title>
+    <style>
+      :root {
+        --bg: #FAFAF7;
+        --bg-card: #FDFCF9;
+        --bg-sunken: #F4F2EC;
+        --border: #E8E5DD;
+        --text-1: #2C2C2A;
+        --text-2: #5F5E5A;
+        --text-3: #888780;
+        --success: #1D9E75;
+        --success-bg: #E0F1E8;
+        --success-text: #0F6E56;
+        --warning: #E89E4F;
+        --warning-text: #A86B1A;
+        --danger: #E24B4A;
+        --danger-bg: #FCE8E8;
+        --danger-text: #A32D2D;
+        --info: #378ADD;
+        --info-text: #0C447C;
+      }
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Pretendard",
+          system-ui, sans-serif;
+        background: var(--bg); color: var(--text-1); height: 100vh; overflow: hidden;
+        font-size: 13px; font-weight: 400;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .header {
+        display: flex; align-items: center; justify-content: space-between;
+        padding: 12px 20px; background: var(--bg-card);
+        border-bottom: 0.5px solid var(--border);
+      }
+      .header h1 { font-size: 14px; font-weight: 500; color: var(--text-1); }
+      .header h1 span { color: var(--text-2); font-weight: 400; margin-left: 6px; }
+      .header-nav { display: flex; gap: 4px; }
+      .header-nav a {
+        color: var(--text-2); text-decoration: none; font-size: 12px;
+        padding: 6px 12px; border-radius: 6px; border: 0.5px solid transparent;
+      }
+      .header-nav a:hover { color: var(--text-1); background: var(--bg-sunken); }
+      .header-nav a.active {
+        color: var(--text-1); border-color: var(--border); background: var(--bg-sunken);
+      }
+
+      .layout {
+        display: grid; grid-template-columns: 320px 1fr;
+        height: calc(100vh - 49px);
+      }
+
+      /* --- Left Panel --- */
+      .panel {
+        background: var(--bg-card); border-right: 0.5px solid var(--border);
+        padding: 16px; overflow-y: auto;
+      }
+      .panel h2 {
+        font-size: 11px; color: var(--text-2); margin-bottom: 10px;
+        text-transform: uppercase; letter-spacing: 0.06em; font-weight: 500;
+      }
+      .panel label {
+        display: block; font-size: 12px; color: var(--text-2); margin-bottom: 4px;
+      }
+      .panel input[type="file"],
+      .panel textarea {
+        width: 100%; padding: 8px 10px;
+        border: 0.5px solid var(--border); border-radius: 6px;
+        background: var(--bg); color: var(--text-1);
+        font-size: 12px; font-family: inherit;
+        margin-bottom: 14px;
+      }
+      .panel textarea {
+        height: 120px; resize: vertical;
+        font-family: ui-monospace, "SF Mono", Menlo, monospace;
+      }
+
+      .btn {
+        width: 100%; padding: 9px; border: 0.5px solid var(--border); border-radius: 6px;
+        font-size: 13px; font-weight: 500; cursor: pointer;
+        font-family: inherit; background: var(--bg-card); color: var(--text-1);
+      }
+      .btn:hover { background: var(--bg-sunken); }
+      .btn-primary {
+        background: var(--text-1); color: var(--bg-card); border-color: var(--text-1);
+      }
+      .btn-primary:hover { background: #1a1a18; color: var(--bg-card); }
+      .btn-primary:disabled {
+        background: var(--bg-sunken); color: var(--text-3);
+        border-color: var(--border); cursor: not-allowed;
+      }
+
+      .stage-btns { display: flex; gap: 6px; margin-top: 18px; flex-wrap: wrap; }
+      .stage-btn {
+        flex: 1 1 0; min-width: 60px;
+        padding: 7px 4px; border: 0.5px solid var(--border); border-radius: 6px;
+        background: var(--bg-card); color: var(--text-2); font-size: 11px;
+        cursor: pointer; text-align: center; font-family: inherit;
+      }
+      .stage-btn:hover { background: var(--bg-sunken); color: var(--text-1); }
+      .stage-btn.active {
+        border-color: var(--success); color: var(--success-text);
+        background: var(--success-bg);
+      }
+
+      .status {
+        margin-top: 14px; font-size: 11px; color: var(--text-3); min-height: 18px;
+      }
+      .status.error { color: var(--danger-text); }
+      .status.success { color: var(--success-text); }
+
+      .legend { margin-top: 20px; }
+      .legend h3 {
+        font-size: 11px; color: var(--text-2); margin-bottom: 8px;
+        text-transform: uppercase; letter-spacing: 0.04em; font-weight: 500;
+      }
+      .legend-item {
+        display: flex; align-items: center; gap: 8px;
+        margin-bottom: 4px; font-size: 11px; color: var(--text-2);
+      }
+      .legend-dot {
+        width: 10px; height: 10px; border-radius: 3px;
+        border: 0.5px solid var(--border);
+      }
+
+      /* --- Metrics Panel --- */
+      .metrics-panel {
+        margin-top: 18px; padding: 12px; background: var(--bg-card);
+        border: 0.5px solid var(--border); border-radius: 6px; font-size: 12px;
+      }
+      .metrics-panel h3 {
+        font-size: 11px; color: var(--text-2); margin-bottom: 8px;
+        text-transform: uppercase; letter-spacing: 0.04em; font-weight: 500;
+      }
+      .metric-row {
+        display: flex; justify-content: space-between; padding: 4px 0;
+        border-bottom: 0.5px solid var(--border);
+      }
+      .metric-row:last-child { border-bottom: 0; }
+      .metric-label { color: var(--text-2); }
+      .metric-value { font-weight: 500; color: var(--text-1); }
+      .metric-value.good { color: var(--success-text); }
+      .metric-value.warn { color: var(--warning-text); }
+      .metric-value.bad { color: var(--danger-text); }
+      .rack-card {
+        margin: 6px 0; padding: 8px 10px; border-radius: 6px;
+        border-left: 3px solid var(--border);
+        background: var(--bg-card);
+        border-top: 0.5px solid var(--border);
+        border-right: 0.5px solid var(--border);
+        border-bottom: 0.5px solid var(--border);
+      }
+      .rack-card.good { border-left-color: var(--success); background: var(--success-bg); }
+      .rack-card.warn { border-left-color: var(--warning); background: rgba(232, 158, 79, 0.10); }
+      .rack-card.bad  { border-left-color: var(--danger); background: var(--danger-bg); }
+      .rack-header { font-weight: 500; color: var(--text-1); margin-bottom: 4px; }
+      .rack-status { float: right; }
+      .rack-detail { color: var(--text-2); font-size: 11px; }
+
+      /* --- 3D Canvas --- */
+      #viewer { width: 100%; height: 100%; display: block; }
+    </style>
+  </head>
+  <body>
+    <div class="header">
+      <h1>HALO <span>Scan Viewer</span></h1>
+      <nav class="header-nav">
+        <a href="./index.html">시나리오</a>
+        <a href="./components.html">컴포넌트</a>
+        <a href="./dashboard.html">대시보드</a>
+        <a href="./scan.html" class="active">스캔</a>
+      </nav>
+    </div>
+
+    <div class="layout">
+      <div class="panel">
+        <h2>Upload Scan</h2>
+
+        <label for="obj-file">.obj Mesh File</label>
+        <input type="file" id="obj-file" accept=".obj" />
+
+        <label for="metadata">Metadata (JSON)</label>
+        <textarea id="metadata" placeholder='{
+  "cooling_units": [{"position": {"x": 1, "y": 1, "z": 2.5}, "capacity_kw": 10, "supply_direction": [0, 0, -1]}],
+  "legacy_servers": [{"x": 3, "y": 2, "z": 0.5}],
+  "human_workspaces": [{"x": 5, "y": 3, "z": 0}]
+}'></textarea>
+
+        <button type="button" class="btn btn-primary" id="upload-btn">Process Scan</button>
+        <div class="status" id="status"></div>
+
+        <div class="stage-btns" id="stage-btns" style="display:none;">
+          <button type="button" class="stage-btn active" data-stage="raw">Raw</button>
+          <button type="button" class="stage-btn" data-stage="cleaned">Cleaned</button>
+          <button type="button" class="stage-btn" data-stage="semantic">Semantic</button>
+          <button type="button" class="stage-btn" data-stage="voxel">Voxel</button>
+          <button type="button" class="stage-btn" data-stage="thermal">Thermal</button>
+          <button type="button" class="stage-btn" data-stage="ashrae">ASHRAE</button>
+        </div>
+
+        <div class="legend" id="legend" style="display:none;">
+          <h3>Semantic Colors</h3>
+          <div class="legend-item"><div class="legend-dot" style="background:#B4B2A9"></div> Wall / Obstacle</div>
+          <div class="legend-item"><div class="legend-dot" style="background:#E24B4A"></div> Legacy Server (heat)</div>
+          <div class="legend-item"><div class="legend-dot" style="background:#378ADD"></div> AC Vent (cooling)</div>
+          <div class="legend-item"><div class="legend-dot" style="background:#1D9E75"></div> Human Workspace</div>
+          <div class="legend-item"><div class="legend-dot" style="background:#888780"></div> Rack Body</div>
+          <div class="legend-item"><div class="legend-dot" style="background:#378ADD"></div> Rack Intake</div>
+          <div class="legend-item"><div class="legend-dot" style="background:#E89E4F"></div> Rack Exhaust</div>
+        </div>
+
+        <div class="metrics-panel" id="metrics-panel" style="display:none;"></div>
+
+        <div id="demo-section" style="margin-top: 20px; border-top: 0.5px solid var(--border); padding-top: 16px;">
+          <button type="button" class="btn" id="demo-btn">Load Demo Room</button>
+        </div>
+      </div>
+
+      <canvas id="viewer"></canvas>
+    </div>
+
+    <script type="module" src="./src/scan.ts"></script>
+  </body>
+</html>
