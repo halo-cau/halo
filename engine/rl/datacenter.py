@@ -2,6 +2,10 @@ import gymnasium as gym
 import numpy as np
 from gymnasium import spaces
 import scipy.ndimage
+from engine.core.config import SPACE_EMPTY, OBSTACLE_WALL, VOXEL_SIZE
+from engine.core.data_types import RackFacing, RackPlacement, Coordinate, CoolingUnit
+from engine.thermal.solver import compute_thermal_field
+from engine.thermal.metrics import compute_metrics
 
 
 class DataCenterEnv(gym.Env):
@@ -41,6 +45,9 @@ class DataCenterEnv(gym.Env):
 
         self.cached_flow = None
         self.flow_dirty = True
+
+        self.solver_step = 5
+        self.solver_reward_sacle = 0.2
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
@@ -371,3 +378,76 @@ class DataCenterEnv(gym.Env):
 
     def action_masks(self):
         return self.get_action_mask()
+
+    def build_3D_scene(self):
+        H = 5
+
+        grid3D = np.zeros((self.grid_size, self.grid_size, H), dtype=np.int8)
+
+        grid3D[:] = SPACE_EMPTY
+
+        for x in range(self.grid_size):
+            for y in range(self.grid_size):
+                if self.obstacle[x, y] == 1:
+                    grid3D[x, y, :] = OBSTACLE_WALL
+
+        racks = []
+        for x, y in np.argwhere(self.rack_map == 1):
+            direction = int(self.rack_dir[x, y])
+
+            facing = {
+                0: RackFacing.PLUS_X,
+                1: RackFacing.MINUS_X,
+                2: RackFacing.PLUS_Y,
+                3: RackFacing.MINUS_Y,
+            }[direction]
+        racks.append(
+            RackPlacement(
+                position=Coordinate(
+                    x=float(x) * VOXEL_SIZE, y=float(y) * VOXEL_SIZE, z=0.0
+                ),
+                facing=facing,
+                power_kw=float(self.rack_power[x, y]),
+                airflow_cfm=800.0,
+            )
+        )
+
+        cooling_units = []
+        for cx, cy in self.cooling_pos:
+            cooling_units.append(
+                CoolingUnit(
+                    position=Coordinate(
+                        x=float(cx) * VOXEL_SIZE, y=float(cy) * VOXEL_SIZE, z=2.5
+                    ),
+                    supply_direction=(0, 0, -1),
+                    supply_temp_c=14.0,
+                    airflow_cfm=2000.0,
+                )
+            )
+
+        origin = np.array([0.0, 0.0, 0.0])
+
+        return grid3D, racks, cooling_units, origin
+
+    def compute_solver_reward(self):
+        grid3D, racks, cooling_units, origin = self.build_3D_scene()
+
+        temp = compute_thermal_field(
+            grid=grid3D, racks=racks, cooling_units=cooling_units, origin=origin
+        )
+
+        metrics = compute_metrics(
+            grid=grid3D,
+            temp=temp,
+            racks=racks,
+            origin=origin,
+            cooling_units=cooling_units,
+        )
+
+        reward = (
+            metrics.room.rci_hi * 0.1
+            + metrics.room.rci_lo * 0.1
+            - metrics.room.shi * 2.0
+            - max(0, metrics.room.mean_intake - 27) * 2.0
+        )
+        return reward
