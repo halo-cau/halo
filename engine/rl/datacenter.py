@@ -4,6 +4,58 @@ from gymnasium import spaces
 import scipy.ndimage
 
 
+# ---------------------------------------------------------------------------
+# Shared ASHRAE reward formula (used by both fast-2D and engine-3D paths)
+# ---------------------------------------------------------------------------
+
+
+def _ashrae_reward_from_metrics(metrics) -> float:
+    """Compute the ASHRAE TC 9.9 reward from a MetricsResult object.
+
+    This is the canonical reward formula shared by both the fast 2-D path
+    (which approximates intakes/exhausts from adjacent cells) and the
+    authoritative 3-D engine path (which runs the full physics solver).
+    Keeping it in one place ensures both paths produce comparable signals.
+
+    Returns a scalar reward:
+        - ~ +3.5 for an ideal layout (all racks compliant, good airflow)
+        - ~  0   for a mediocre layout
+        - ~ −5   for a layout with widespread allowable violations
+    """
+    intakes = np.array([r.intake_temp for r in metrics.racks])
+    exhausts = np.array([r.exhaust_temp for r in metrics.racks])
+    dts = exhausts - intakes
+
+    # ASHRAE compliance fractions
+    s_rec = float(np.mean((intakes >= 18.0) & (intakes <= 27.0)))
+    s_allow = float(np.mean((intakes >= 15.0) & (intakes <= 35.0)))
+
+    # Magnitude of allowable violations (per rack, normalised to 10 °C band)
+    p_allow = float(
+        np.mean(np.maximum(intakes - 35.0, 0.0) + np.maximum(15.0 - intakes, 0.0))
+        / 10.0
+    )
+
+    # Delta-T health: ideal 6–20 °C; penalise outside that band
+    p_dt = float(
+        np.mean(np.maximum(6.0 - dts, 0.0) / 6.0 + np.maximum(dts - 20.0, 0.0) / 10.0)
+    )
+
+    # RCI-style score from room vertical profile
+    vp = np.array(metrics.room.vertical_profile)
+    rci_hi_viol = float(np.mean(np.maximum(vp - 27.0, 0.0)) / 8.0)
+    rci_lo_viol = float(np.mean(np.maximum(15.0 - vp, 0.0)) / 5.0)
+    s_rci = 1.0 - 0.5 * (rci_hi_viol + rci_lo_viol)
+
+    # Thermal stratification penalty (95th – 5th percentile spread > 6 °C)
+    spread = float(np.percentile(vp, 95) - np.percentile(vp, 5))
+    p_strat = max(0.0, (spread - 6.0) / 8.0)
+
+    base = 2.0 * s_rec + 1.5 * s_rci - 3.0 * p_allow - 0.8 * p_dt - 0.5 * p_strat
+    gate = -2.0 * (1.0 - s_allow)
+    return float(base + gate)
+
+
 class DataCenterEnv(gym.Env):
     def __init__(self, grid_size=50, rack_num=10, num_cooler=3):
         super().__init__()
@@ -22,7 +74,6 @@ class DataCenterEnv(gym.Env):
         self.cp = 1005.0
         self.rho = 1.2
         self.airflow = 1.0
-        self.temp_decay = 0.95
 
         self.diff_sigma = 0.3
         self.cool_decay = 6.0
@@ -38,18 +89,12 @@ class DataCenterEnv(gym.Env):
         self.action_space = spaces.Discrete(grid_size * grid_size * 4)
 
         self.observation_space = spaces.Box(
-            low=0, high=1, shape=(8, grid_size, grid_size), dtype=np.float32
+            low=0, high=1, shape=(6, grid_size, grid_size), dtype=np.float32
         )
 
         X, Y = np.meshgrid(np.arange(grid_size), np.arange(grid_size), indexing="ij")
         self.X = X.astype(np.float32)
         self.Y = Y.astype(np.float32)
-
-        self.cached_flow = None
-        self.flow_dirty = True
-
-        self.solver_step = 5
-        self.solver_reward_sacle = 0.2
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
@@ -57,24 +102,9 @@ class DataCenterEnv(gym.Env):
         self.rack_map[:] = 0
         self.rack_dir[:] = 0
         self.temp[:] = 0
-        self.rack_power = np.zeros((self.grid_size, self.grid_size))
-        self.cached_flow = None
-        self.flow_dirty = True
 
-        if options is not None:
-            self.obstacle = options.get("obstacle", self._generate_layout())
-            self.cooling_pos = options.get(
-                "cooling_pos", self._generate_cooling(self.obstacle)
-            )
-            self.num_cooler = len(self.cooling_pos)
-            self.rack_num = options.get("rack_num", self.rack_num)
-        else:
-            self.obstacle = self._generate_layout()
-            free_mask = self.obstacle == 0
-            free_cells = np.sum(free_mask)
-            self.rack_num = self.np_random.integers(5, free_cells * 0.5)
-            self.num_cooler = self.np_random.integers(2, 10)
-            self.cooling_pos = self._generate_cooling(self.obstacle)
+        self.obstacle = self._generate_layout()
+        self.cooling_pos = self._generate_cooling(self.obstacle)
 
         self.step_count = 0
 
@@ -89,14 +119,29 @@ class DataCenterEnv(gym.Env):
 
         if self.rack_map[x, y] == 1 or self.obstacle[x, y] == 1:
             return self._get_obs(), -100.0, False, False, {}
+
         self.rack_map[x, y] = 1
         self.rack_dir[x, y] = dir
-        self.rack_power[x, y] = np.random.uniform(0.8, 2.5)
 
         self.step_count += 1
 
         self._update_temp()
         done = self.step_count >= self.rack_num
+
+        if done:
+            # Episode end: run the 3-D thermal engine once for the final reward
+            metrics = self._bridge.solve_metrics(
+                self.rack_map,
+                self.rack_dir,
+                self.obstacle,
+                self.cooling_pos,
+            )
+            reward = (
+                _ashrae_reward_from_metrics(metrics) if metrics is not None else 0.0
+            )
+        else:
+            # Mid-episode: lightweight position shaping (no thermal solve)
+            reward = self._position_shaping_reward()
 
         return self._get_obs(), reward, done, False, {}
 
@@ -108,44 +153,23 @@ class DataCenterEnv(gym.Env):
 
         dist = self._cooling_dist_map()
 
-        remaining = (self.rack_num - self.step_count) / self.rack_num
-        rack_num = np.ones((self.grid_size, self.grid_size)) * remaining
-
-        cooling_num = np.ones((self.grid_size, self.grid_size)) * (
-            self.num_cooler / 10.0
-        )
-
         return np.stack(
-            [
-                self.rack_map,
-                self.obstacle,
-                self.temp,
-                flow_x,
-                flow_y,
-                dist,
-                rack_num,
-                cooling_num,
-            ],
+            [self.rack_map, self.obstacle, self.temp, flow_x, flow_y, dist],
             axis=0,
         ).astype(np.float32)
 
     def _update_temp(self):
         temp = self.temp.copy()
-
-        self.rack_power = np.clip(self.rack_power, 0.5, 3.0)
-
-        temp = temp * self.temp_decay + self._compute_exhaust()
+        temp += self._compute_exhaust()
 
         flow = self._compute_airflow()
 
-        for _ in range(3):
+        for _ in range(5):
             temp = self._advect(temp, flow)
 
         temp = scipy.ndimage.gaussian_filter(temp, sigma=self.diff_sigma)
 
         temp = self._apply_cooling(temp)
-
-        temp[self.obstacle == 1] = 0
 
         self.temp = np.clip(temp, 0, 5)
 
@@ -153,20 +177,13 @@ class DataCenterEnv(gym.Env):
         temp = np.zeros_like(self.temp)
 
         dirs = np.array([(1, 0), (-1, 0), (0, 1), (0, -1)])
+
         racks = np.argwhere(self.rack_map == 1)
 
         for x, y in racks:
             d = dirs[int(self.rack_dir[x, y])]
 
-            base_power = self.rack_power[x, y]
-
-            intake_x = np.clip(x - d[0], 0, self.grid_size - 1)
-            intake_y = np.clip(y - d[1], 0, self.grid_size - 1)
-            intake_temp = self.temp[intake_x, intake_y]
-
-            load = np.clip(base_power, 0.5, 3.0)
-            power = base_power * (1 + 0.5 * intake_temp + 0.2 * load)
-
+            power = 1.0
             delta_T = power / (self.airflow * self.cp + 1e-6)
 
             rx = self.X - x
@@ -176,6 +193,7 @@ class DataCenterEnv(gym.Env):
             perp = np.abs(rx * d[1] - ry * d[0])
 
             jet = np.zeros_like(self.temp)
+
             valid = proj > 0
 
             jet[valid] = (
@@ -187,9 +205,6 @@ class DataCenterEnv(gym.Env):
         return temp
 
     def _compute_airflow(self):
-        if not self.flow_dirty:
-            return self.cached_flow
-
         flow = np.zeros((self.grid_size, self.grid_size, 2))
 
         for cx, cy in self.cooling_pos:
@@ -202,24 +217,20 @@ class DataCenterEnv(gym.Env):
             flow[:, :, 1] -= dy / dist
 
         dirs = np.array([(1, 0), (-1, 0), (0, 1), (0, -1)])
-        racks = np.argwhere(self.rack_map == 1)
 
-        for x, y in racks:
+        mask = self.rack_map == 1
+        rack_indices = np.argwhere(mask)
+
+        for x, y in rack_indices:
             d = dirs[int(self.rack_dir[x, y])]
             flow[x, y, 0] += d[0] * 2.0
             flow[x, y, 1] += d[1] * 2.0
 
         flow[self.obstacle == 1] = 0
 
-        norm = np.linalg.norm(flow, axis=-1, keepdims=True)
-        flow = flow / (norm + 1e-6)
-        flow = flow * np.tanh(norm)
-        flow = flow + 0.5
+        flow = flow / (np.linalg.norm(flow, axis=-1, keepdims=True) + 1e-6)
 
-        self.cached_flow = flow
-        self.flow_dirty = False
-
-        return flow
+        return flow * 0.5
 
     def _advect(self, temp, flow):
         x = self.X - flow[:, :, 0]
@@ -246,23 +257,11 @@ class DataCenterEnv(gym.Env):
         )
 
     def _apply_cooling(self, temp):
-        target_temp = 0.3
-        error = np.mean(temp) - target_temp
-
-        self.cooling_power = np.clip(self.cooling_power + 0.1 * error, 0.0, 2.0)
-
         for cx, cy in self.cooling_pos:
             d = np.sqrt((self.X - cx) ** 2 + (self.Y - cy) ** 2)
             effect = np.exp(-d / self.cool_decay)
 
-            local_cooling = np.maximum(temp - target_temp, 0)
-
-            flow = self._compute_airflow()
-            flow_strength = np.linalg.norm(flow, axis=-1)
-
-            temp -= (
-                self.cooling_power * effect * local_cooling * (1 + 0.5 * flow_strength)
-            )
+            temp -= effect * (temp - 0.2)
 
         return temp
 
@@ -366,190 +365,14 @@ class DataCenterEnv(gym.Env):
     def get_action_mask(self):
         mask = np.ones(self.grid_size * self.grid_size * 4, dtype=np.float32)
 
-        invalid = (self.rack_map == 1) | (self.obstacle == 1)
-        invalid = invalid.flatten()
+        for i in range(self.grid_size):
+            for j in range(self.grid_size):
+                if self.rack_map[i, j] == 1 or self.obstacle[i, j] == 1:
+                    for d in range(4):
+                        idx = (i * self.grid_size + j) * 4 + d
+                        mask[idx] = 0
 
-        for d in range(4):
-            mask[d::4][invalid] = 0
         return mask
 
     def action_masks(self):
         return self.get_action_mask()
-
-    def build_3D_scene(self):
-        H = 5
-
-        grid3D = np.zeros((self.grid_size, self.grid_size, H), dtype=np.int8)
-
-        grid3D[:] = SPACE_EMPTY
-
-        for x in range(self.grid_size):
-            for y in range(self.grid_size):
-                if self.obstacle[x, y] == 1:
-                    grid3D[x, y, :] = OBSTACLE_WALL
-
-        racks = []
-        for x, y in np.argwhere(self.rack_map == 1):
-            direction = int(self.rack_dir[x, y])
-
-            facing = {
-                0: RackFacing.PLUS_X,
-                1: RackFacing.MINUS_X,
-                2: RackFacing.PLUS_Y,
-                3: RackFacing.MINUS_Y,
-            }[direction]
-        racks.append(
-            RackPlacement(
-                position=Coordinate(
-                    x=float(x) * VOXEL_SIZE, y=float(y) * VOXEL_SIZE, z=0.0
-                ),
-                facing=facing,
-                power_kw=5.0,
-                airflow_cfm=800.0,
-            )
-        )
-
-        cooling_units = []
-        for cx, cy in self.cooling_pos:
-            cooling_units.append(
-                CoolingUnit(
-                    position=Coordinate(
-                        x=float(cx) * VOXEL_SIZE, y=float(cy) * VOXEL_SIZE, z=2.5
-                    ),
-                    supply_direction=(0, 0, -1),
-                    supply_temp_c=14.0,
-                    airflow_cfm=2000.0,
-                )
-            )
-
-        origin = np.array([0.0, 0.0, 0.0])
-
-        return grid3D, racks, cooling_units, origin
-
-    def compute_solver_reward(self):
-        grid3D, racks, cooling_units, origin = self.build_3D_scene()
-
-        temp = compute_thermal_field(
-            grid=grid3D, racks=racks, cooling_units=cooling_units, origin=origin
-        )
-
-        self.temp = np.mean(temp, axis=2)
-
-        metrics = compute_metrics(
-            grid=grid3D,
-            temp=temp,
-            racks=racks,
-            origin=origin,
-            cooling_units=cooling_units,
-        )
-
-        reward = (
-            metrics.room.rci_hi * 0.1
-            + metrics.room.rci_lo * 0.1
-            - metrics.room.shi * 2.0
-            - max(0, metrics.room.mean_intake - 27) * 2.0
-        )
-        return reward
-
-    def _cooling_proxi_reward(self):
-        rack_positions = np.argwhere(self.rack_map == 1)
-
-        if len(rack_positions) == 0:
-            return 0.0
-
-        total = 0.0
-        for x, y in rack_positions:
-            d = np.min(
-                np.sqrt(
-                    (self.cooling_pos[:, 0] - x) ** 2
-                    + (self.cooling_pos[:, 1] - y) ** 2
-                )
-            )
-
-            total += np.exp(-d / 5.0)
-
-        return total / len(rack_positions)
-
-    def _airflow_alignment_reward(self):
-        flow = self._compute_airflow()
-
-        dirs = np.array([(1, 0), (-1, 0), (0, 1), (0, -1)])
-
-        score = 0.0
-        racks = np.argwhere(self.rack_map == 1)
-
-        for x, y in racks:
-            d = dirs[int(self.rack_dir[x, y])]
-            f = flow[x, y]
-
-            # cosine similarity
-            dot = d[0] * f[0] + d[1] * f[1]
-            score += dot
-
-        return score / (len(racks) + 1e-6)
-
-    def _density_penalty(self):
-        rack_positions = np.argwhere(self.rack_map == 1)
-
-        if len(rack_positions) < 2:
-            return 0.0
-
-        dist = np.linalg.norm(
-            rack_positions[:, None] - rack_positions[None, :], axis=-1
-        )
-
-        dist += np.eye(len(rack_positions)) * 1e6
-
-        mean_dist = np.mean(dist)
-
-        return -np.exp(-mean_dist / 5.0)
-
-    def _hotspot_penalty(self):
-        heat = np.zeros((self.grid_size, self.grid_size))
-
-        racks = np.argwhere(self.rack_map == 1)
-
-        for x, y in racks:
-            power = self.rack_power[x, y]
-
-            dx = self.X - x
-            dy = self.Y - y
-            dist = np.sqrt(dx**2 + dy**2) + 1e-6
-
-            heat += power * np.exp(-dist / 3.0)
-
-        max_heat = np.max(heat)
-        mean_heat = np.mean(heat)
-
-        return -(0.5 * max_heat + 0.5 * mean_heat)
-
-    def fast_reward(self):
-
-        cooling = self._cooling_proxi_reward()
-
-        airflow = self._airflow_alignment_reward()
-
-        density = self._density_penalty()
-
-        heat = np.mean(self.rack_power)
-
-        if np.any(self.rack_map == 1):
-            coords = np.argwhere(self.rack_map == 1)
-
-            hotspot = 0.0
-            for x, y in coords:
-                d = np.min(
-                    np.sqrt(
-                        (self.cooling_pos[:, 0] - x) ** 2
-                        + (self.cooling_pos[:, 1] - y) ** 2
-                    )
-                )
-                hotspot += d
-
-            hotspot /= len(coords)
-        else:
-            hotspot = 0.0
-
-        return (
-            2.0 * cooling + 1.5 * airflow - 1.0 * density - 1.2 * heat - 0.8 * hotspot
-        )
