@@ -8,6 +8,7 @@ import scipy.ndimage
 # Shared ASHRAE reward formula (used by both fast-2D and engine-3D paths)
 # ---------------------------------------------------------------------------
 
+
 def _ashrae_reward_from_metrics(metrics) -> float:
     """Compute the ASHRAE TC 9.9 reward from a MetricsResult object.
 
@@ -21,24 +22,24 @@ def _ashrae_reward_from_metrics(metrics) -> float:
         - ~  0   for a mediocre layout
         - ~ −5   for a layout with widespread allowable violations
     """
-    intakes  = np.array([r.intake_temp  for r in metrics.racks])
+    intakes = np.array([r.intake_temp for r in metrics.racks])
     exhausts = np.array([r.exhaust_temp for r in metrics.racks])
-    dts      = exhausts - intakes
+    dts = exhausts - intakes
 
     # ASHRAE compliance fractions
-    s_rec   = float(np.mean((intakes >= 18.0) & (intakes <= 27.0)))
+    s_rec = float(np.mean((intakes >= 18.0) & (intakes <= 27.0)))
     s_allow = float(np.mean((intakes >= 15.0) & (intakes <= 35.0)))
 
     # Magnitude of allowable violations (per rack, normalised to 10 °C band)
-    p_allow = float(np.mean(
-        np.maximum(intakes - 35.0, 0.0) + np.maximum(15.0 - intakes, 0.0)
-    ) / 10.0)
+    p_allow = float(
+        np.mean(np.maximum(intakes - 35.0, 0.0) + np.maximum(15.0 - intakes, 0.0))
+        / 10.0
+    )
 
     # Delta-T health: ideal 6–20 °C; penalise outside that band
-    p_dt = float(np.mean(
-        np.maximum(6.0 - dts,  0.0) / 6.0
-        + np.maximum(dts - 20.0, 0.0) / 10.0
-    ))
+    p_dt = float(
+        np.mean(np.maximum(6.0 - dts, 0.0) / 6.0 + np.maximum(dts - 20.0, 0.0) / 10.0)
+    )
 
     # RCI-style score from room vertical profile
     vp = np.array(metrics.room.vertical_profile)
@@ -47,16 +48,10 @@ def _ashrae_reward_from_metrics(metrics) -> float:
     s_rci = 1.0 - 0.5 * (rci_hi_viol + rci_lo_viol)
 
     # Thermal stratification penalty (95th – 5th percentile spread > 6 °C)
-    spread  = float(np.percentile(vp, 95) - np.percentile(vp, 5))
+    spread = float(np.percentile(vp, 95) - np.percentile(vp, 5))
     p_strat = max(0.0, (spread - 6.0) / 8.0)
 
-    base = (
-        2.0 * s_rec
-        + 1.5 * s_rci
-        - 3.0 * p_allow
-        - 0.8 * p_dt
-        - 0.5 * p_strat
-    )
+    base = 2.0 * s_rec + 1.5 * s_rci - 3.0 * p_allow - 0.8 * p_dt - 0.5 * p_strat
     gate = -2.0 * (1.0 - s_allow)
     return float(base + gate)
 
@@ -88,6 +83,7 @@ class DataCenterEnv(gym.Env):
         # (when done=True) to compute the final ASHRAE reward.
         # The 2-D field (self.temp) is still maintained for the observation.
         from engine.rl.thermal_bridge import ThermalBridge
+
         self._bridge = ThermalBridge(grid_size=grid_size)
 
         self.action_space = spaces.Discrete(grid_size * grid_size * 4)
@@ -135,9 +131,14 @@ class DataCenterEnv(gym.Env):
         if done:
             # Episode end: run the 3-D thermal engine once for the final reward
             metrics = self._bridge.solve_metrics(
-                self.rack_map, self.rack_dir, self.obstacle, self.cooling_pos,
+                self.rack_map,
+                self.rack_dir,
+                self.obstacle,
+                self.cooling_pos,
             )
-            reward = _ashrae_reward_from_metrics(metrics) if metrics is not None else 0.0
+            reward = (
+                _ashrae_reward_from_metrics(metrics) if metrics is not None else 0.0
+            )
         else:
             # Mid-episode: lightweight position shaping (no thermal solve)
             reward = self._position_shaping_reward()
@@ -284,10 +285,10 @@ class DataCenterEnv(gym.Env):
         if len(racks) == 0:
             return 0.0
 
-        x, y = racks[-1]   # the rack just placed
+        x, y = racks[-1]  # the rack just placed
         dirs = np.array([(1, 0), (-1, 0), (0, 1), (0, -1)])
         my_dir = int(self.rack_dir[x, y])
-        my_exhaust = dirs[my_dir]   # unit vector: direction exhaust blows
+        my_exhaust = dirs[my_dir]  # unit vector: direction exhaust blows
 
         # ── 1. Hot-/cold-aisle alignment ───────────────────────────────────────
         r_aisle = 0.0
