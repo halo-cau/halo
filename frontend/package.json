@@ -17,6 +17,7 @@
   "packageManager": "pnpm@10.13.1",
   "dependencies": {
     "@types/three": "^0.183.1",
+    "echarts": "^6.0.0",
     "three": "^0.183.2"
   },
   "devDependencies": {
