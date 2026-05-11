@@ -14,12 +14,16 @@ reward function can trust.
 
 Physical mapping
 ----------------
-Each RL grid cell corresponds to 0.4 m × 0.4 m of floor space (CELL_M).
-A 50×50 grid therefore covers a 20 m × 20 m room — identical to the
-voxel engine's default GRID_SHAPE of 200×200 at VOXEL_SIZE=0.1 m.
+Each RL grid cell corresponds to 0.2 m × 0.2 m of floor space (CELL_M).
+A 50×50 grid therefore covers a 10 m × 10 m room — matching the voxel
+engine's GRID_SHAPE of 100×100 at VOXEL_SIZE=0.1 m.  Rooms smaller than
+10 m × 10 m occupy a sub-grid; the outer cells become perimeter walls.
 
-Ceiling height defaults to 3.0 m (30 voxels).  Each RL cooling position
-maps to a ceiling-mounted CRAC blowing straight down.
+Ceiling height defaults to 3.0 m (30 voxels) for training-time random
+rooms.  When a real scanned room is used, pass the actual ceiling height
+via ThermalBridge(ceiling_m=...) so the 3-D voxel grid matches the scan.
+Each RL cooling position maps to a ceiling-mounted CRAC blowing straight
+down.
 
 Direction mapping (RL exhaust direction → RackFacing intake direction)
 ----------------------------------------------------------------------
@@ -57,12 +61,11 @@ from engine.thermal.solver import compute_thermal_field
 # ---------------------------------------------------------------------------
 # Physical constants
 # ---------------------------------------------------------------------------
-CELL_M: float = 0.4          # metres per RL grid cell (50 cells → 20 m room)
-CEILING_M: float = 3.0       # room ceiling height in metres
-CEILING_V: int = int(round(CEILING_M / VOXEL_SIZE))   # = 30 voxels
+CELL_M: float = 0.2          # metres per RL grid cell (50 cells × 0.2 m = 10 m max room)
+_DEFAULT_CEILING_M: float = 3.0   # default ceiling height for training; override with actual scan
 
-# Voxels per RL cell along each horizontal axis
-_CELL_V: int = int(round(CELL_M / VOXEL_SIZE))        # = 4
+# Voxels per RL cell along each horizontal axis (recomputed from CELL_M)
+_CELL_V: int = int(round(CELL_M / VOXEL_SIZE))        # = 2
 
 # Direction → RackFacing (RL exhaust direction → solver intake direction)
 _DIR_TO_FACING: dict[int, RackFacing] = {
@@ -88,6 +91,10 @@ class ThermalBridge:
     ----------
     grid_size : int
         Side length of the RL grid (default 50).
+    ceiling_m : float
+        Room ceiling height in metres.  Use the scanned room's actual height
+        when running inference on a real layout; defaults to 3.0 m for
+        training with randomly generated rooms.
     rack_type : str
         Rack model key used for all placed racks (default "42U").
     power_kw : float
@@ -99,19 +106,22 @@ class ThermalBridge:
     def __init__(
         self,
         grid_size: int = 50,
+        ceiling_m: float = _DEFAULT_CEILING_M,
         rack_type: str = "42U",
         power_kw: float = DEFAULT_RACK_POWER_KW,
         airflow_cfm: float = DEFAULT_RACK_AIRFLOW_CFM,
     ) -> None:
         self.grid_size = grid_size
+        self._ceiling_m = ceiling_m
         self.rack_type = rack_type
         self.power_kw = power_kw
         self.airflow_cfm = airflow_cfm
 
-        # Pre-compute voxel grid shape: (X, Y, Z)
-        self._nx = grid_size * _CELL_V        # 50 * 4 = 200
-        self._ny = grid_size * _CELL_V        # 200
-        self._nz = CEILING_V                  # 30
+        # Voxel grid shape: X and Y from RL grid size, Z from actual ceiling height.
+        # With CELL_M=0.2 m and _CELL_V=2: 50 cells × 2 voxels = 100 voxels per axis.
+        self._nx = grid_size * _CELL_V
+        self._ny = grid_size * _CELL_V
+        self._nz = max(1, int(round(ceiling_m / VOXEL_SIZE)))
         self._origin = np.zeros(3, dtype=np.float64)
 
     # ------------------------------------------------------------------
@@ -189,7 +199,7 @@ class ThermalBridge:
             wy = (float(gy) + 0.5) * CELL_M
             units.append(
                 CoolingUnit(
-                    position=Coordinate(x=wx, y=wy, z=CEILING_M),
+                    position=Coordinate(x=wx, y=wy, z=self._ceiling_m),
                     capacity_kw=DEFAULT_AC_CAPACITY_KW,
                     supply_direction=(0.0, 0.0, -1.0),   # blowing downward
                     supply_temp_c=DEFAULT_AC_SUPPLY_TEMP_C,
@@ -289,12 +299,19 @@ class ThermalBridge:
             # Body
             grid[x0c:x1c, y0c:y1c, z0c:z1c] = RACK_BODY
 
-            # Intake face (first voxel along the depth axis, at position side)
+            # Intake/exhaust faces depend on the exhaust direction (sign).
+            # sign > 0: exhaust blows toward max-axis → intake at min face, exhaust at max face
+            # sign < 0: exhaust blows toward min-axis → exhaust at min face, intake at max face
+            # (This matches solver._facing_to_axis_dir and the "intake at position" convention.)
             if axis == 0:
-                grid[x0c:x0c + 1, y0c:y1c, z0c:z1c] = RACK_INTAKE
-                grid[x1c - 1:x1c, y0c:y1c, z0c:z1c] = RACK_EXHAUST
+                low_face  = RACK_EXHAUST if sign < 0 else RACK_INTAKE
+                high_face = RACK_INTAKE  if sign < 0 else RACK_EXHAUST
+                grid[x0c:x0c + 1, y0c:y1c, z0c:z1c] = low_face
+                grid[x1c - 1:x1c, y0c:y1c, z0c:z1c] = high_face
             else:
-                grid[x0c:x1c, y0c:y0c + 1, z0c:z1c] = RACK_INTAKE
-                grid[x0c:x1c, y1c - 1:y1c, z0c:z1c] = RACK_EXHAUST
+                low_face  = RACK_EXHAUST if sign < 0 else RACK_INTAKE
+                high_face = RACK_INTAKE  if sign < 0 else RACK_EXHAUST
+                grid[x0c:x1c, y0c:y0c + 1, z0c:z1c] = low_face
+                grid[x0c:x1c, y1c - 1:y1c, z0c:z1c] = high_face
 
         return grid
