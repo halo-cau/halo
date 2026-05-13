@@ -2,7 +2,7 @@ from stable_baselines3 import PPO
 from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
 from stable_baselines3.common.vec_env import VecNormalize, VecMonitor
 from stable_baselines3.common.monitor import Monitor
-from datacenter import DataCenterEnv
+from engine.rl.datacenter import DataCenterEnv
 import wandb
 from wandb.integration.sb3 import WandbCallback
 from stable_baselines3.common.callbacks import CheckpointCallback
@@ -44,7 +44,8 @@ def make_env(rank):
     return _init
 
 
-if __name__ == "__main__":
+# if __name__ == "__main__":
+def train():
     config = {
         "learning_rate": 5e-5,
         "n_steps": 1024,
