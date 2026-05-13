@@ -4,11 +4,12 @@
 VOXEL_SIZE: float = 0.1  # 1 voxel = 0.1 m (10 cm)
 
 # --- Grid Limits (meters) ---
-MAX_ROOM_DIMENSIONS: tuple[float, float, float] = (20.0, 20.0, 6.0)
+MAX_ROOM_DIMENSIONS: tuple[float, float, float] = (10.0, 10.0, 5.0)
 
-# Fixed observation shape for the RL environment.
-# Derived from MAX_ROOM_DIMENSIONS / VOXEL_SIZE → (200, 200, 60).
-GRID_SHAPE: tuple[int, int, int] = (200, 200, 60)
+# Maximum voxel grid that can represent any room within MAX_ROOM_DIMENSIONS.
+# Derived from MAX_ROOM_DIMENSIONS / VOXEL_SIZE → (100, 100, 50).
+# Actual scanned rooms are smaller; unused voxels are padded with SPACE_EMPTY.
+GRID_SHAPE: tuple[int, int, int] = (100, 100, 50)
 
 # --- Semantic Tags (np.int8 values) ---
 SPACE_EMPTY: int = 0
@@ -41,6 +42,20 @@ RANSAC_NUM_ITERATIONS: int = 1000
 
 # --- Morphological Closing ---
 CLOSING_ITERATIONS: int = 2
+
+# --- Manhattan World Rectification (iterative RANSAC plane extraction) ---
+# Plane normal must lie within this angle of a principal axis to qualify as a
+# structural wall / floor / ceiling.
+MANHATTAN_NORMAL_TOL_DEG: float = 25.0
+# Maximum number of dominant planes extracted in one pass.
+MANHATTAN_MAX_PLANES: int = 12
+# RANSAC inlier distance: vertices within this distance of the fitted plane are
+# treated as members of that structural surface.  Tight (3 cm) so that objects
+# protruding from walls (AC units, door frames, racks) are NOT included.
+MANHATTAN_PLANE_INLIER_DIST_M: float = 0.03
+# A plane must contain at least this fraction of total vertices to be considered
+# structural.  Filters out small object faces (rack panels, cabinet sides).
+MANHATTAN_MIN_PLANE_INLIER_FRAC: float = 0.01
 
 # --- Gaussian Heat Injection ---
 HEAT_RADIUS_VOXELS: int = 5
