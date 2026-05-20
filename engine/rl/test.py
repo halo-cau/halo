@@ -43,7 +43,6 @@ def visualize_advanced(env, step, reward=None):
     rack = env.rack_map
     obstacle = env.obstacle
     cooling = env.cooling_pos
-    flow = env._compute_airflow()
 
     plt.figure(figsize=(7, 7))
 
@@ -59,18 +58,9 @@ def visualize_advanced(env, step, reward=None):
     Y = np.arange(0, env.grid_size, skip)
     XX, YY = np.meshgrid(X, Y)
 
-    U = flow[::skip, ::skip, 1]  # x 방향
-    V = flow[::skip, ::skip, 0]  # y 방향
-
-    # 🔥 magnitude로 색 표현
-    mag = np.sqrt(U**2 + V**2)
-
     plt.quiver(
         XX,
         YY,
-        U,
-        V,
-        mag,  # 색 = 세기
         cmap="cool",
         scale=25,
         width=0.003,
@@ -126,26 +116,26 @@ def make_env():
     return _init
 
 
-PATH = "./ppo_logs/ppo_dc_20260506_175459/"
+PATH = "./ppo_logs/ppo_dc_20260518_151637/"
 grid = np.zeros((50, 50))
 grid[:40, :] = 1
 grid[:, 10:] = 1
 cooler = np.array([[45, 5], [45, 6], [46, 5], [46, 6]])
 options = {
     "obstacle": grid,
-    "rack_num": 50,
+    "rack_num": 4,
     "cooling_pos": cooler,
 }
 
 
 def test():
     env = DummyVecEnv([make_env()])
-    env = VecNormalize.load(f"{PATH}center_15000000_steps_vecnormalize.pkl", env)
+    env = VecNormalize.load(f"{PATH}center_3000000_steps_vecnormalize.pkl", env)
     env.training = False
     env.norm_reward = False
 
-    model = MaskablePPO.load(f"{PATH}center_15000000_steps", env=env)
-    obs, _ = env.envs[0].reset(options=options)
+    model = MaskablePPO.load(f"{PATH}center_3000000_steps", env=env)
+    obs, _ = env.envs[0].reset(options=None)
     obs = env.normalize_obs(obs)
     done = False
     step = 0
@@ -156,5 +146,5 @@ def test():
         obs, reward, done, _, _ = env.envs[0].step(action)
         # done = done[0]
         step += 1
-        if step == env.envs[0].rack_num - 1:
+        if step == env.envs[0].rack_num:
             visualize_advanced(env.envs[0], step)

@@ -17,9 +17,9 @@ import scipy.ndimage
 # The rack body extends D cells from (gx, gy) toward the exhaust direction,
 # and spans W cells centered on the lateral coordinate.
 # ---------------------------------------------------------------------------
-_RACK_W_CELLS: int = 3   # 0.60 m / 0.20 m
-_RACK_D_CELLS: int = 5   # 1.00 m / 0.20 m
-_RACK_HW: int = _RACK_W_CELLS // 2   # = 1
+_RACK_W_CELLS: int = 3  # 0.60 m / 0.20 m
+_RACK_D_CELLS: int = 5  # 1.00 m / 0.20 m
+_RACK_HW: int = _RACK_W_CELLS // 2  # = 1
 
 # Exhaust face offset from the intake reference cell, by direction index.
 # dir 0: +X exhaust → rack extends toward +X; exhaust at (gx + D-1, gy)
@@ -38,6 +38,7 @@ _DIR_EXHAUST_OFFSET: list[tuple[int, int]] = [
 # Shared ASHRAE reward formula (used by both fast-2D and engine-3D paths)
 # ---------------------------------------------------------------------------
 
+
 def _ashrae_reward_from_metrics(metrics) -> float:
     """Compute the ASHRAE TC 9.9 reward from a MetricsResult object.
 
@@ -46,48 +47,45 @@ def _ashrae_reward_from_metrics(metrics) -> float:
         - ~  0   for a mediocre layout
         - ~ −5   for a layout with widespread allowable violations
     """
-    intakes  = np.array([r.intake_temp  for r in metrics.racks])
+    intakes = np.array([r.intake_temp for r in metrics.racks])
     exhausts = np.array([r.exhaust_temp for r in metrics.racks])
-    dts      = exhausts - intakes
+    dts = exhausts - intakes
 
-    s_rec   = float(np.mean((intakes >= 18.0) & (intakes <= 27.0)))
+    s_rec = float(np.mean((intakes >= 18.0) & (intakes <= 27.0)))
     s_allow = float(np.mean((intakes >= 15.0) & (intakes <= 35.0)))
 
-    p_allow = float(np.mean(
-        np.maximum(intakes - 35.0, 0.0) + np.maximum(15.0 - intakes, 0.0)
-    ) / 10.0)
+    p_allow = float(
+        np.mean(np.maximum(intakes - 35.0, 0.0) + np.maximum(15.0 - intakes, 0.0))
+        / 10.0
+    )
 
-    p_dt = float(np.mean(
-        np.maximum(6.0 - dts,  0.0) / 6.0
-        + np.maximum(dts - 20.0, 0.0) / 10.0
-    ))
+    p_dt = float(
+        np.mean(np.maximum(6.0 - dts, 0.0) / 6.0 + np.maximum(dts - 20.0, 0.0) / 10.0)
+    )
 
     vp = np.array(metrics.room.vertical_profile)
     rci_hi_viol = float(np.mean(np.maximum(vp - 27.0, 0.0)) / 8.0)
     rci_lo_viol = float(np.mean(np.maximum(15.0 - vp, 0.0)) / 5.0)
     s_rci = 1.0 - 0.5 * (rci_hi_viol + rci_lo_viol)
 
-    spread  = float(np.percentile(vp, 95) - np.percentile(vp, 5))
+    spread = float(np.percentile(vp, 95) - np.percentile(vp, 5))
     p_strat = max(0.0, (spread - 6.0) / 8.0)
 
-    base = (
-        2.0 * s_rec
-        + 1.5 * s_rci
-        - 3.0 * p_allow
-        - 0.8 * p_dt
-        - 0.5 * p_strat
-    )
+    base = 2.0 * s_rec + 1.5 * s_rci - 3.0 * p_allow - 0.8 * p_dt - 0.5 * p_strat
     gate = -2.0 * (1.0 - s_allow)
     return float(base + gate)
 
 
 class DataCenterEnv(gym.Env):
+    metadata = {"render_modes": ["rgb_array"]}
+
     def __init__(self, grid_size=50, rack_num=10, num_cooler=3, ceiling_m: float = 3.0):
         super().__init__()
 
         self.grid_size = grid_size
         self.rack_num = rack_num
         self.num_cooler = num_cooler
+        self.ceiling_m = ceiling_m
 
         # rack_map[gx, gy] = 1 at the INTAKE FACE CENTER of each placed rack.
         # Used by ThermalBridge to locate racks and read their facing direction.
@@ -119,6 +117,7 @@ class DataCenterEnv(gym.Env):
         # ceiling_m should match the scanned room's actual height; for training
         # with randomly generated layouts the default of 3.0 m is used.
         from engine.rl.thermal_bridge import ThermalBridge
+
         self._bridge = ThermalBridge(grid_size=grid_size, ceiling_m=ceiling_m)
 
         self.action_space = spaces.Discrete(grid_size * grid_size * 4)
@@ -147,8 +146,8 @@ class DataCenterEnv(gym.Env):
 
         if options is not None:
             self.obstacle = options.get("obstacle", self._generate_layout())
-            self.cooling_pos = options.get(
-                "cooling_pos", self._generate_cooling(self.obstacle)
+            self.cooling_pos = np.array(
+                options.get("cooling_pos", self._generate_cooling(self.obstacle))
             )
             self.num_cooler = len(self.cooling_pos)
             self.rack_num = options.get("rack_num", self.rack_num)
@@ -156,9 +155,16 @@ class DataCenterEnv(gym.Env):
             self.obstacle = self._generate_layout()
             free_mask = self.obstacle == 0
             free_cells = np.sum(free_mask)
-            self.rack_num = self.np_random.integers(5, free_cells * 0.5)
+            max_racks = max(
+                2,
+                free_cells
+                // (
+                    (_RACK_W_CELLS + 1) * (_RACK_D_CELLS + 1)
+                ),  # for spacing between racks
+            )  # rough upper bound
+            self.rack_num = self.np_random.integers(1, max_racks)
             self.num_cooler = self.np_random.integers(2, 10)
-            self.cooling_pos = self._generate_cooling(self.obstacle)
+            self.cooling_pos = np.array(self._generate_cooling(self.obstacle))
 
         self.step_count = 0
 
@@ -175,20 +181,18 @@ class DataCenterEnv(gym.Env):
         footprint = self._rack_footprint(x, y, dir)
         for fx, fy in footprint:
             if not (0 <= fx < self.grid_size and 0 <= fy < self.grid_size):
-                return self._get_obs(), -100.0, False, False, {}
+                return self._get_obs(), -1.0, False, False, {}
             if self.rack_occupied[fx, fy] == 1 or self.obstacle[fx, fy] == 1:
-                return self._get_obs(), -100.0, False, False, {}
+                return self._get_obs(), -1.0, False, False, {}
+            self.rack_occupied[fx, fy] = 1
 
         # Place the rack: record intake reference cell and mark full footprint.
         self.rack_map[x, y] = 1
         self.rack_dir[x, y] = dir
         self.rack_power[x, y] = np.random.uniform(0.8, 2.5)
-        for fx, fy in footprint:
-            self.rack_occupied[fx, fy] = 1
 
         self.step_count += 1
 
-        self._update_temp()
         done = self.step_count >= self.rack_num
 
         self.flow_dirty = True
@@ -196,13 +200,20 @@ class DataCenterEnv(gym.Env):
         if done:
             # Episode end: run the 3-D thermal engine once for the final reward.
             metrics = self._bridge.solve_metrics(
-                self.rack_map, self.rack_dir, self.obstacle, self.cooling_pos,
+                self.rack_map,
+                self.rack_dir,
+                self.obstacle,
+                self.cooling_pos,
             )
-            reward = _ashrae_reward_from_metrics(metrics) if metrics is not None else 0.0
+            reward = (
+                _ashrae_reward_from_metrics(metrics) if metrics is not None else -10.0
+            )
+            info = {"metrics": metrics}
         else:
             reward = self._position_shaping_reward()
+            info = {}
 
-        return self._get_obs(), reward, done, False, {}
+        return self._get_obs(), reward, done, False, info
 
     def _rack_footprint(self, gx: int, gy: int, dir_idx: int) -> list[tuple[int, int]]:
         """All (x, y) RL cells occupied by a 42U rack whose intake face is at (gx, gy).
@@ -214,11 +225,11 @@ class DataCenterEnv(gym.Env):
         if dir_idx in (0, 1):  # depth along X axis
             x_range = (
                 range(gx, gx + _RACK_D_CELLS)
-                if dir_idx == 0                      # +X exhaust: body toward +X
+                if dir_idx == 0  # +X exhaust: body toward +X
                 else range(gx - _RACK_D_CELLS + 1, gx + 1)  # -X exhaust: body toward -X
             )
             y_range = range(gy - _RACK_HW, gy - _RACK_HW + _RACK_W_CELLS)
-        else:                  # depth along Y axis
+        else:  # depth along Y axis
             x_range = range(gx - _RACK_HW, gx - _RACK_HW + _RACK_W_CELLS)
             y_range = (
                 range(gy, gy + _RACK_D_CELLS)
@@ -231,24 +242,39 @@ class DataCenterEnv(gym.Env):
         return cells
 
     def _get_obs(self):
-        flow = self._compute_airflow()
+        cooler_map = np.zeros((self.grid_size, self.grid_size), dtype=np.float32)
+        for cx, cy in self.cooling_pos:
+            cooler_map[cx, cy] = 1.0
 
-        flow_x = flow[:, :, 0]
-        flow_y = flow[:, :, 1]
+        dist_map = self._cooling_dist_map()
 
-        dist = self._cooling_dist_map()
+        density_map = scipy.ndimage.gaussian_filter(
+            self.rack_occupied.astype(np.float32), sigma=1.5
+        )
 
-        remaining = (self.rack_num - self.step_count) / self.rack_num
-        rack_num_ch = np.ones((self.grid_size, self.grid_size)) * remaining
-        cooling_num_ch = np.ones((self.grid_size, self.grid_size)) * (self.num_cooler / 10.0)
+        remaining_ratio = (self.rack_num - self.step_count) / max(1, self.rack_num)
+        rack_num_ch = np.full(
+            (self.grid_size, self.grid_size), remaining_ratio, dtype=np.float32
+        )
+        cooling_num_ch = np.full(
+            (self.grid_size, self.grid_size), (self.num_cooler / 10.0), dtype=np.float32
+        )
 
-        # Channel 0: rack_occupied shows the full physical footprint (3×5 cells per rack).
         return np.stack(
-            [self.rack_occupied, self.obstacle, self.temp, flow_x, flow_y, dist,
-             rack_num_ch, cooling_num_ch],
+            [
+                self.rack_occupied.astype(np.float32),
+                self.obstacle.astype(np.float32),
+                density_map,
+                cooler_map,
+                dist_map,
+                np.zeros_like(density_map),
+                rack_num_ch,
+                cooling_num_ch,
+            ],
             axis=0,
         ).astype(np.float32)
 
+    """
     def _update_temp(self):
         temp = self.temp.copy()
 
@@ -270,7 +296,7 @@ class DataCenterEnv(gym.Env):
         self.temp = np.clip(temp, 0, 5)
 
     def _compute_exhaust(self):
-        """Inject heat from each rack's exhaust face, not from the intake reference cell."""
+        """ """Inject heat from each rack's exhaust face, not from the intake reference cell.""" """
         temp = np.zeros_like(self.temp)
 
         dirs = np.array([(1, 0), (-1, 0), (0, 1), (0, -1)])
@@ -393,8 +419,8 @@ class DataCenterEnv(gym.Env):
                 self.cooling_power * effect * local_cooling * (1 + 0.5 * flow_strength)
             )
 
-
         return temp
+    """
 
     def _position_shaping_reward(self) -> float:
         """Lightweight per-step shaping reward (no thermal solve).
@@ -411,12 +437,14 @@ class DataCenterEnv(gym.Env):
         if len(racks) == 0:
             return 0.0
 
-        x, y = racks[-1]   # the rack just placed
+        x, y = racks[-1]  # the rack just placed
         dirs = np.array([(1, 0), (-1, 0), (0, 1), (0, -1)])
         my_exhaust = dirs[int(self.rack_dir[x, y])]
 
         r_aisle = 0.0
-        aisle_range = _RACK_D_CELLS + 2   # reference cells within which alignment matters
+        aisle_range = (
+            _RACK_D_CELLS + 2
+        )  # reference cells within which alignment matters
         for rx, ry in racks[:-1]:
             nb_exhaust = dirs[int(self.rack_dir[rx, ry])]
             dot = float(my_exhaust @ nb_exhaust)
@@ -437,10 +465,10 @@ class DataCenterEnv(gym.Env):
     def _generate_layout(self):
         grid = np.zeros((self.grid_size, self.grid_size))
 
-        margin_top = np.random.randint(0, 15)
-        margin_bottom = np.random.randint(0, 15)
-        margin_left = np.random.randint(0, 15)
-        margin_right = np.random.randint(0, 15)
+        margin_top = np.random.randint(0, 20)
+        margin_bottom = np.random.randint(0, 20)
+        margin_left = np.random.randint(0, 20)
+        margin_right = np.random.randint(0, 20)
 
         if margin_top > 0:
             grid[:margin_top, :] = 1
@@ -451,46 +479,35 @@ class DataCenterEnv(gym.Env):
         if margin_right > 0:
             grid[:, -margin_right:] = 1
 
-        grid_x_size = self.grid_size - margin_top - margin_bottom
-        grid_y_size = self.grid_size - margin_left - margin_right
-
-        max_spacing = max(6, min(grid_x_size, grid_y_size) // 2)
-        pillar = np.random.randint(5, max_spacing)
-
-        for i in range(margin_top + pillar, self.grid_size - margin_bottom, pillar):
-            for j in range(margin_left + pillar, self.grid_size - margin_right, pillar):
-                if np.random.rand() < 0.8:
-                    grid[i, j] = 1
-
         return grid
 
     def _generate_cooling(self, obstacle):
         pos = []
         free = np.argwhere(obstacle == 0)
-        for _ in range(self.num_cooler):
-            idx = np.random.choice(len(free))
+        idxs = np.random.choice(len(free), size=self.num_cooler, replace=False)
+        for idx in idxs:
             pos.append(free[idx])
         return np.array(pos)
 
     def get_action_mask(self):
         """Mask any action whose 42U footprint overlaps an obstacle or placed rack."""
-        mask = np.ones(self.grid_size * self.grid_size * 4, dtype=np.float32)
+        mask = np.ones((self.grid_size, self.grid_size, 4), dtype=np.float32)
 
-        for i in range(self.grid_size):
-            for j in range(self.grid_size):
-                for d in range(4):
+        blocked = (self.rack_occupied == 1) | (self.obstacle == 1)
+
+        for d in range(4):
+            for i in range(self.grid_size):
+                for j in range(self.grid_size):
                     footprint = self._rack_footprint(i, j, d)
-                    blocked = False
                     for fx, fy in footprint:
-                        if not (0 <= fx < self.grid_size and 0 <= fy < self.grid_size):
-                            blocked = True
+                        if (
+                            not (0 <= fx < self.grid_size and 0 <= fy < self.grid_size)
+                            or blocked[fx, fy]
+                        ):
+                            mask[i, j, d] = 0.0
                             break
-                        if self.rack_occupied[fx, fy] == 1 or self.obstacle[fx, fy] == 1:
-                            blocked = True
-                            break
-                    if blocked:
-                        mask[(i * self.grid_size + j) * 4 + d] = 0
-        return mask
+
+        return mask.flatten()
 
     def action_masks(self):
         return self.get_action_mask()
