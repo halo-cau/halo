@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException
 from app.core.rl_service import rl_service
-from app.schemas.optimize import OptimizeRequest, OptimizeResponse
+from app.schemas.datacenter import OptimizeRequest, OptimizeResponse
 
 router = APIRouter()
 

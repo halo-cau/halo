@@ -1,8 +1,5 @@
 import sys
 import numpy as np
-
-sys.path.append("../../engine/rl")
-
 from engine.rl.datacenter import DataCenterEnv
 from sb3_contrib import MaskablePPO
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
@@ -41,9 +38,12 @@ class RLService:
             actions = []
 
             while not done:
-                action, _ = self.model.predict(obs, deterministic=True)
+                action_masks = self.env.action_masks()
+                action, _ = self.model.predict(
+                    obs, action_masks=action_masks, deterministic=True
+                )
                 obs, _, done, _, _ = self.env.step(action)
-                actions.append(action)
+                actions.append(action[0])
 
             return self._decode(actions)
 
