@@ -1,10 +1,35 @@
-"""Step 2-4: Surface voxelization, morphological closing, and semantic fusion."""
+"""Voxelization and post-voxel metadata stamping.
+
+This module is the *grid-side* of the CV pipeline. It runs AFTER mesh
+semantic segmentation (Mask3D, in ``segmentor_*.py``) has already removed
+movable objects from the input mesh.
+
+Two distinct kinds of "label" exist in HALO; this file owns the second one:
+
+* **Mesh vertex labels** — assigned per-vertex by Mask3D (wall, floor, server
+  rack, box clutter, …) and used to strip movable geometry. Lives in the
+  ``segmentor_*`` modules.
+* **Voxel labels** — assigned per voxel by *stamping user-supplied metadata*
+  (AC vents, legacy heat sources, racks, workspaces) onto the integer voxel
+  grid. Lives in this module via :func:`voxelize_and_stamp_metadata`.
+
+Calling these "labels" means two different things, so the public function is
+named to make the source explicit: voxel labels are stamped from
+``ScanMetadata``, not inferred."""
+
+from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING, Union
 
 import numpy as np
 import trimesh
 from scipy.ndimage import binary_closing, gaussian_filter
+
+if TYPE_CHECKING:  # pragma: no cover — typing-only import
+    import open3d as o3d
+
+VoxelizerInput = Union[Path, str, trimesh.Trimesh, "o3d.geometry.TriangleMesh"]
 
 from engine.core.config import (
     CLOSING_ITERATIONS,
@@ -171,12 +196,18 @@ def _inject_heat(
     region[overwrite] = HEAT_LEGACY_SERVER
 
 
-def fuse_semantics(
+def _stamp_metadata_labels(
     grid: np.ndarray,
     metadata: ScanMetadata,
     origin: np.ndarray,
 ) -> np.ndarray:
-    """Step 4: Stamp semantic labels onto the voxel grid from metadata."""
+    """Stamp voxel labels from user-supplied ``ScanMetadata``.
+
+    This is the voxel-level labeling pass. It runs AFTER voxelization and
+    assigns semantic IDs (AC vent, legacy heat source, rack body/intake/
+    exhaust, human workspace) to voxels based on real-world coordinates the
+    user supplied — not based on any AI inference.
+    """
     grid = grid.copy()
 
     for unit in metadata.cooling_units:
@@ -299,32 +330,82 @@ def _stamp_rack(
             grid[x0c:x1c, si:y1c, z0c:z1c] = RACK_EXHAUST
 
 
-def voxelize_and_label(
-    ply_path: Path,
+def _to_trimesh(source: VoxelizerInput) -> trimesh.Trimesh:
+    """Coerce any supported input into a trimesh.Trimesh.
+
+    Supports filesystem paths (.ply/.obj — anything trimesh.load handles),
+    trimesh.Trimesh instances (returned as-is), and Open3D TriangleMesh
+    objects (converted directly via vertex / triangle arrays — no disk IO).
+    """
+    if isinstance(source, trimesh.Trimesh):
+        return source
+    if isinstance(source, (str, Path)):
+        return trimesh.load(str(source), force="mesh")
+    # Treat anything else as an Open3D mesh (duck-typed to avoid a hard
+    # dependency on open3d at import time).
+    vertices = getattr(source, "vertices", None)
+    triangles = getattr(source, "triangles", None)
+    if vertices is None or triangles is None:
+        raise TypeError(
+            f"Unsupported voxelizer input type: {type(source).__name__}"
+        )
+    return trimesh.Trimesh(
+        vertices=np.asarray(vertices, dtype=np.float64),
+        faces=np.asarray(triangles, dtype=np.int64),
+        process=False,
+    )
+
+
+def voxelize_and_stamp_metadata(
+    source: VoxelizerInput,
     metadata: ScanMetadata,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Run Steps 2-4: voxelization → closing → semantic fusion.
+    """Voxelize an (already-segmented) mesh and stamp metadata labels onto it.
 
-    Returns (grid, origin) where grid is the final int8 ndarray
-    (shape matches the actual room) and origin is the world-space
-    offset of index [0,0,0].
+    Pipeline contract:
+      1. Surface-voxelize the input mesh into an int8 grid (wall / empty).
+      2. Morphologically close the wall mask to seal small scan holes.
+      3. Stamp voxel labels from ``ScanMetadata`` (AC vents, legacy heat,
+         racks, workspaces). These labels come from the user's tags, not
+         from any AI segmentor — see :func:`_stamp_metadata_labels`.
+
+    The input mesh is expected to have movable objects already removed by
+    the upstream segmentor (Mask3D). If you pass an unsegmented mesh, those
+    movables will end up baked into the wall mask.
+
+    Accepts a filesystem path (.ply/.obj), a ``trimesh.Trimesh``, or an
+    ``open3d.geometry.TriangleMesh``. Path inputs are loaded with trimesh;
+    Open3D meshes are converted directly without round-tripping through disk.
+
+    Returns ``(grid, origin)`` where ``grid`` is the final int8 ndarray
+    (shape matches the actual room, before padding) and ``origin`` is the
+    world-space offset of index ``[0, 0, 0]``.
     """
-    mesh = trimesh.load(str(ply_path), force="mesh")
+    mesh = _to_trimesh(source)
     if mesh.is_empty:
         raise MeshProcessingError("Cleaned mesh contains no geometry for voxelization.")
 
     _check_bounds(mesh)
 
-    # Step 2
     grid, origin = _surface_voxelize(mesh)
-
-    # Step 3
     grid = _morphological_close(grid)
-
-    # Step 4
-    grid = fuse_semantics(grid, metadata, origin)
+    grid = _stamp_metadata_labels(grid, metadata, origin)
 
     return grid, origin
+
+
+def stamp_rack_on_grid(
+    grid: np.ndarray,
+    rack: RackPlacement,
+    origin: np.ndarray,
+) -> None:
+    """Public alias for :func:`_stamp_rack` — in-place rack stamping.
+
+    Use this from the optimize endpoint (and any external caller) to overlay
+    RL-chosen rack placements onto a cached scan grid before invoking the
+    thermal solver. The function modifies ``grid`` in place.
+    """
+    _stamp_rack(grid, rack, origin)
 
 
 def pad_to_fixed_shape(grid: np.ndarray) -> tuple[np.ndarray, tuple[int, int, int]]:
