@@ -14,13 +14,13 @@ class RLService:
     def __init__(self):
         try:
             self.env = DummyVecEnv([make_env])
-            self.env = VecNormalize.load("rl/vecnormalize.pkl", self.env)
+            self.env = VecNormalize.load("engine/rl/vecnormalize.pkl", self.env)
             self.env.training = False
             self.env.norm_reward = False
         except Exception as e:
             print(f"Vecnormalize load failed: {e}")
 
-        self.model = MaskablePPO.load("rl/model.zip")
+        self.model = MaskablePPO.load("engine/rl/model.zip")
 
         self.lock = threading.Lock()
 
@@ -36,16 +36,26 @@ class RLService:
 
             done = False
             actions = []
+            info = {}
 
             while not done:
                 action_masks = self.env.action_masks()
                 action, _ = self.model.predict(
                     obs, action_masks=action_masks, deterministic=True
                 )
-                obs, _, done, _, _ = self.env.step(action)
+                obs, _, dones, infos = self.env.step(action)
+                done = dones[0]
+                info = infos[0]
                 actions.append(action[0])
 
-            return self._decode(actions)
+            total_energy = info.get("total_energy", 0.0)
+            max_temp = info.get("max_temp", [])
+
+            return {
+                "total_energy": float(total_energy),
+                "max_temp": max_temp,
+                "data": self._decode(actions),
+            }
 
     def _decode(self, actions):
         result = []
