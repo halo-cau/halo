@@ -4,6 +4,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.endpoints import router
+from app.api.inference import router as inference_router
+from app.api.optimize import router as optimize_router
 from app.api.visualize import router as visualize_router
 
 app = FastAPI(
@@ -21,3 +23,5 @@ app.add_middleware(
 
 app.include_router(router, prefix="/api/v1")
 app.include_router(visualize_router, prefix="/api/v1")
+app.include_router(inference_router, prefix="/api/v1")
+app.include_router(optimize_router, prefix="/api/v1")

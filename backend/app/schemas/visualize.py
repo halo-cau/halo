@@ -64,6 +64,7 @@ class EquipmentItem(BaseModel):
 
 
 class VisualizeResponse(BaseModel):
+    scan_id: str  # opaque handle the client passes to /optimize for re-running RL
     raw_glb: str  # base64-encoded GLB (before cleanup)
     cleaned_glb: str  # base64-encoded GLB (after SOR + floor alignment)
     semantic_glb: str | None = None  # base64-encoded GLB with vertex colors (optional)
