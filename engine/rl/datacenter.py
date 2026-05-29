@@ -181,9 +181,9 @@ class DataCenterEnv(gym.Env):
         footprint = self._rack_footprint(x, y, dir)
         for fx, fy in footprint:
             if not (0 <= fx < self.grid_size and 0 <= fy < self.grid_size):
-                return self._get_obs(), -1.0, False, False, {}
+                return self._get_obs(), -10.0, True, False, {}
             if self.rack_occupied[fx, fy] == 1 or self.obstacle[fx, fy] == 1:
-                return self._get_obs(), -1.0, False, False, {}
+                return self._get_obs(), -10.0, True, False, {}
             self.rack_occupied[fx, fy] = 1
 
         # Place the rack: record intake reference cell and mark full footprint.
