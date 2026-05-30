@@ -53,33 +53,38 @@ from engine.core.config import (
     RACK_INTAKE,
     SPACE_EMPTY,
     VOXEL_SIZE,
+    CFM_TO_M3_S,
+    AIR_DENSITY_KG_M3,
+    AIR_CP_J_KG_K,
 )
 from engine.core.data_types import Coordinate, CoolingUnit, RackFacing, RackPlacement
 from engine.thermal.metrics import MetricsResult, compute_metrics
-from engine.thermal.solver import compute_thermal_field
+from engine.thermal.solver import compute_thermal_field, _world_to_index_solver
 
 # ---------------------------------------------------------------------------
 # Physical constants
 # ---------------------------------------------------------------------------
-CELL_M: float = 0.2          # metres per RL grid cell (50 cells × 0.2 m = 10 m max room)
-_DEFAULT_CEILING_M: float = 3.0   # default ceiling height for training; override with actual scan
+CELL_M: float = 0.2  # metres per RL grid cell (50 cells × 0.2 m = 10 m max room)
+_DEFAULT_CEILING_M: float = (
+    3.0  # default ceiling height for training; override with actual scan
+)
 
 # Voxels per RL cell along each horizontal axis (recomputed from CELL_M)
-_CELL_V: int = int(round(CELL_M / VOXEL_SIZE))        # = 2
+_CELL_V: int = int(round(CELL_M / VOXEL_SIZE))  # = 2
 
 # Direction → RackFacing (RL exhaust direction → solver intake direction)
 _DIR_TO_FACING: dict[int, RackFacing] = {
-    0: RackFacing.MINUS_X,   # RL exhaust +x → intake −x
-    1: RackFacing.PLUS_X,    # RL exhaust −x → intake +x
-    2: RackFacing.MINUS_Y,   # RL exhaust +y → intake −y
-    3: RackFacing.PLUS_Y,    # RL exhaust −y → intake +y
+    0: RackFacing.MINUS_X,  # RL exhaust +x → intake −x
+    1: RackFacing.PLUS_X,  # RL exhaust −x → intake +x
+    2: RackFacing.MINUS_Y,  # RL exhaust +y → intake −y
+    3: RackFacing.PLUS_Y,  # RL exhaust −y → intake +y
 }
 
 # Fixed facing → (axis, sign) for exhaust — mirrors solver._facing_to_axis_dir
 _FACING_AXIS_SIGN: dict[RackFacing, tuple[int, int]] = {
-    RackFacing.PLUS_X:  (0, -1),
+    RackFacing.PLUS_X: (0, -1),
     RackFacing.MINUS_X: (0, +1),
-    RackFacing.PLUS_Y:  (1, -1),
+    RackFacing.PLUS_Y: (1, -1),
     RackFacing.MINUS_Y: (1, +1),
 }
 
@@ -134,7 +139,7 @@ class ThermalBridge:
         rack_dir: np.ndarray,
         obstacle: np.ndarray,
         cooling_pos: np.ndarray,
-    ) -> MetricsResult | None:
+    ) -> tuple[MetricsResult | None, np.ndarray, float]:
         """Run the 3-D thermal engine and return ASHRAE metrics.
 
         Returns ``None`` if no racks have been placed yet.
@@ -159,9 +164,27 @@ class ThermalBridge:
         semantic_grid = self._build_semantic_grid(obstacle, racks, cooling_pos)
 
         temp_3d = compute_thermal_field(
-            semantic_grid, racks, self._origin, cooling_units,
+            semantic_grid,
+            racks,
+            self._origin,
+            cooling_units,
         )
-        return compute_metrics(semantic_grid, temp_3d, racks, self._origin)
+
+        air_mask = np.isin(
+            semantic_grid, [SPACE_EMPTY, RACK_INTAKE, RACK_EXHAUST, COOLING_AC_VENT]
+        )
+        masked_temp = np.where(air_mask, temp_3d, np.nan)
+        temp_2d = np.nanmean(masked_temp, axis=2)
+        temp_2d = np.nan_to_num(temp_2d, -1.0)
+
+        cooling_energy = self.compute_cooling_energy(
+            temp_3d, cooling_units, semantic_grid, self._origin
+        )
+        return (
+            compute_metrics(semantic_grid, temp_3d, racks, self._origin),
+            temp_2d,
+            cooling_energy,
+        )
 
     # ------------------------------------------------------------------
     # Internal builders
@@ -201,7 +224,7 @@ class ThermalBridge:
                 CoolingUnit(
                     position=Coordinate(x=wx, y=wy, z=self._ceiling_m),
                     capacity_kw=DEFAULT_AC_CAPACITY_KW,
-                    supply_direction=(0.0, 0.0, -1.0),   # blowing downward
+                    supply_direction=(0.0, 0.0, -1.0),  # blowing downward
                     supply_temp_c=DEFAULT_AC_SUPPLY_TEMP_C,
                     airflow_cfm=DEFAULT_AC_AIRFLOW_CFM,
                 )
@@ -228,7 +251,9 @@ class ThermalBridge:
         closed boundary (avoids airflow escaping at grid edges).
         """
         grid = np.full(
-            (self._nx, self._ny, self._nz), SPACE_EMPTY, dtype=np.int8,
+            (self._nx, self._ny, self._nz),
+            SPACE_EMPTY,
+            dtype=np.int8,
         )
 
         # ── Perimeter walls ───────────────────────────────────────────
@@ -260,9 +285,9 @@ class ThermalBridge:
         # ── Rack voxels ───────────────────────────────────────────────
         dims = RACK_DIMENSIONS.get(self.rack_type, RACK_DIMENSIONS["42U"])
         rack_w, rack_d, rack_h = dims
-        vw = max(1, int(round(rack_w / VOXEL_SIZE)))   # voxels wide
-        vd = max(1, int(round(rack_d / VOXEL_SIZE)))   # voxels deep
-        vh = max(1, int(round(rack_h / VOXEL_SIZE)))   # voxels tall
+        vw = max(1, int(round(rack_w / VOXEL_SIZE)))  # voxels wide
+        vd = max(1, int(round(rack_d / VOXEL_SIZE)))  # voxels deep
+        vh = max(1, int(round(rack_h / VOXEL_SIZE)))  # voxels tall
         half_w = vw // 2
 
         for rack in racks:
@@ -304,14 +329,56 @@ class ThermalBridge:
             # sign < 0: exhaust blows toward min-axis → exhaust at min face, intake at max face
             # (This matches solver._facing_to_axis_dir and the "intake at position" convention.)
             if axis == 0:
-                low_face  = RACK_EXHAUST if sign < 0 else RACK_INTAKE
-                high_face = RACK_INTAKE  if sign < 0 else RACK_EXHAUST
-                grid[x0c:x0c + 1, y0c:y1c, z0c:z1c] = low_face
-                grid[x1c - 1:x1c, y0c:y1c, z0c:z1c] = high_face
+                low_face = RACK_EXHAUST if sign < 0 else RACK_INTAKE
+                high_face = RACK_INTAKE if sign < 0 else RACK_EXHAUST
+                grid[x0c : x0c + 1, y0c:y1c, z0c:z1c] = low_face
+                grid[x1c - 1 : x1c, y0c:y1c, z0c:z1c] = high_face
             else:
-                low_face  = RACK_EXHAUST if sign < 0 else RACK_INTAKE
-                high_face = RACK_INTAKE  if sign < 0 else RACK_EXHAUST
-                grid[x0c:x1c, y0c:y0c + 1, z0c:z1c] = low_face
-                grid[x0c:x1c, y1c - 1:y1c, z0c:z1c] = high_face
+                low_face = RACK_EXHAUST if sign < 0 else RACK_INTAKE
+                high_face = RACK_INTAKE if sign < 0 else RACK_EXHAUST
+                grid[x0c:x1c, y0c : y0c + 1, z0c:z1c] = low_face
+                grid[x0c:x1c, y1c - 1 : y1c, z0c:z1c] = high_face
 
         return grid
+
+    def compute_cooling_energy(
+        self,
+        temp_3d: np.ndarray,
+        cooling_units: list[CoolingUnit],
+        grid: np.ndarray,
+        origin: np.ndarray,
+    ) -> float:
+        """
+        각 냉각 유닛의 물리적 냉각 부하(kW)를 계산합니다.
+        """
+        total_cooling_load_kw = 0.0
+
+        for unit in cooling_units:
+            # 1. T_supply: 설정된 공급 온도 (기존 객체 속성 활용)
+            t_supply = unit.supply_temp_c
+
+            # 2. T_return: 쿨링 유닛 주변(흡입구) 온도를 샘플링
+            # 유닛 위치의 복셀 좌표 변환
+            ux, uy, uz = _world_to_index_solver(
+                unit.position.x, unit.position.y, unit.position.z, origin
+            )
+
+            # 유닛 주변 3x3x3 영역의 온도 평균을 구함 (리턴 온도 추정)
+            # 단, 공기 영역(air_mask)만 고려하여 샘플링
+            roi = temp_3d[
+                max(0, ux - 1) : min(grid.shape[0], ux + 2),
+                max(0, uy - 1) : min(grid.shape[1], uy + 2),
+                max(0, uz - 1) : min(grid.shape[2], uz + 2),
+            ]
+            t_return = np.mean(roi)
+
+            # 3. Q = V_dot * rho * Cp * deltaT
+            volume_m3s = unit.airflow_cfm * CFM_TO_M3_S
+            m_dot = volume_m3s * AIR_DENSITY_KG_M3
+
+            delta_t = max(0, t_return - t_supply)
+            load_kw = (m_dot * AIR_CP_J_KG_K * delta_t) / 1000.0  # W -> kW
+
+            total_cooling_load_kw += load_kw
+
+        return total_cooling_load_kw

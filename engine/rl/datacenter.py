@@ -199,7 +199,7 @@ class DataCenterEnv(gym.Env):
 
         if done:
             # Episode end: run the 3-D thermal engine once for the final reward.
-            metrics = self._bridge.solve_metrics(
+            metrics, temp_2d, cooling_energy = self._bridge.solve_metrics(
                 self.rack_map,
                 self.rack_dir,
                 self.obstacle,
@@ -208,7 +208,7 @@ class DataCenterEnv(gym.Env):
             reward = (
                 _ashrae_reward_from_metrics(metrics) if metrics is not None else -10.0
             )
-            info = {"metrics": metrics}
+            info = {"metrics": metrics, "temp": temp_2d, "total_energy": cooling_energy}
         else:
             reward = self._position_shaping_reward()
             info = {}
