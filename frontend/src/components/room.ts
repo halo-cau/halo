@@ -8,7 +8,7 @@ export function buildRoom(group: THREE.Group, sceneData: SceneGraph): void {
   // Floor — raised-floor look
   const floorGeo = new THREE.PlaneGeometry(rw, rd);
   const floorMat = new THREE.MeshStandardMaterial({
-    color: 0xe8e5dd,
+    color: 0x282828,
     roughness: 0.85,
   });
   const floor = new THREE.Mesh(floorGeo, floorMat);
@@ -19,7 +19,7 @@ export function buildRoom(group: THREE.Group, sceneData: SceneGraph): void {
 
   // Floor tile grid
   const tileSize = 0.6;
-  const tileMat = new THREE.LineBasicMaterial({ color: 0xd3d1c7, linewidth: 1 });
+  const tileMat = new THREE.LineBasicMaterial({ color: 0x5a5a5a, linewidth: 1 });
   for (let x = 0; x <= rw; x += tileSize) {
     const geo = new THREE.BufferGeometry().setFromPoints([
       new THREE.Vector3(x, 0.002, 0),
@@ -37,9 +37,9 @@ export function buildRoom(group: THREE.Group, sceneData: SceneGraph): void {
 
   // Walls
   const wallMat = new THREE.MeshStandardMaterial({
-    color: 0xe8e5dd,
+    color: 0x606060,
     transparent: true,
-    opacity: 0.22,
+    opacity: 0.40,
     side: THREE.DoubleSide,
   });
 
@@ -63,7 +63,7 @@ export function buildRoom(group: THREE.Group, sceneData: SceneGraph): void {
   group.add(eastWall);
 
   // Floor outline
-  const edgeMat = new THREE.LineBasicMaterial({ color: 0x888780, linewidth: 1 });
+  const edgeMat = new THREE.LineBasicMaterial({ color: 0x777777, linewidth: 1 });
   const floorOutline = new THREE.BufferGeometry().setFromPoints([
     new THREE.Vector3(0, 0.005, 0),
     new THREE.Vector3(rw, 0.005, 0),
@@ -74,8 +74,8 @@ export function buildRoom(group: THREE.Group, sceneData: SceneGraph): void {
   group.add(new THREE.Line(floorOutline, edgeMat));
 
   // Corner pillars
-  const pillarGeo = new THREE.BoxGeometry(0.15, rh, 0.15);
-  const pillarMat = new THREE.MeshStandardMaterial({ color: 0xb4b2a9 });
+  const pillarGeo = new THREE.BoxGeometry(0.25, rh, 0.25);
+  const pillarMat = new THREE.MeshStandardMaterial({ color: 0x404040 });
   const corners: [number, number, number][] = [
     [0, rh / 2, 0],
     [rw, rh / 2, 0],
