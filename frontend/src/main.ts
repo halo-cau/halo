@@ -3,6 +3,7 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { AirflowSystem } from "./components/airflow";
 import { createEquipmentMesh } from "./components/equipment";
 import { buildHeatmap } from "./components/heatmap";
+import { computeAshraeMetrics } from "./lib/ashrae";
 import { buildRoom } from "./components/room";
 import { buildZones } from "./components/zones";
 import {
@@ -35,10 +36,12 @@ class SceneViewer {
   airflowSystem: AirflowSystem;
   zonesGroup: THREE.Group;
   sceneData: SceneGraph;
+  tempReadout: HTMLElement | null;
   animating = false;
 
-  constructor(canvas: HTMLCanvasElement, sceneData: SceneGraph) {
+  constructor(canvas: HTMLCanvasElement, sceneData: SceneGraph, tempReadout: HTMLElement | null) {
     this.sceneData = sceneData;
+    this.tempReadout = tempReadout;
 
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
     this.renderer.setPixelRatio(window.devicePixelRatio);
@@ -104,6 +107,7 @@ class SceneViewer {
     this.furnitureGroup.clear();
     buildRoom(this.roomGroup, this.sceneData);
     buildHeatmap(this.heatmapGroup, this.sceneData);
+    this.updateTempReadout(1.0);
     this.heatmapGroup.visible = heatmapVisible;
     this.airflowSystem.init(this.sceneData);
     this.airflowGroup.visible = airflowVisible;
@@ -145,9 +149,16 @@ class SceneViewer {
   updateSimulation(simMins: number) {
     const loadFactor = getLoadFactor(simMins / 60);
     buildHeatmap(this.heatmapGroup, this.sceneData, loadFactor);
+    this.updateTempReadout(loadFactor);
     this.heatmapGroup.visible = heatmapVisible;
 
     this.updateEquipmentGlow(loadFactor);
+  }
+
+  updateTempReadout(loadFactor: number) {
+    if (!this.tempReadout) return;
+    const { peakIntake } = computeAshraeMetrics(this.sceneData, loadFactor);
+    this.tempReadout.textContent = `최고온도 ${peakIntake.toFixed(1)}°C`;
   }
 
   updateEquipmentGlow(loadFactor: number) {
@@ -222,8 +233,8 @@ function init() {
   const leftCanvas = document.getElementById("canvas-left") as HTMLCanvasElement;
   const rightCanvas = document.getElementById("canvas-right") as HTMLCanvasElement;
 
-  leftViewer = new SceneViewer(leftCanvas, allScenes[0]);
-  rightViewer = new SceneViewer(rightCanvas, allScenes[1]);
+  leftViewer = new SceneViewer(leftCanvas, allScenes[0], document.getElementById("temp-left"));
+  rightViewer = new SceneViewer(rightCanvas, allScenes[1], document.getElementById("temp-right"));
 
   setupButtons();
   setupCameraSync();

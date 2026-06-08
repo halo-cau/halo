@@ -179,6 +179,25 @@
       }
 
 
+      /* === Temperature Readout (floats below 3D view) === */
+      .temp-readout {
+        position: absolute;
+        bottom: 14px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: var(--bg-card);
+        border: 0.5px solid var(--border);
+        border-radius: 20px;
+        padding: 5px 16px;
+        font-size: 12px;
+        font-weight: 500;
+        color: var(--text-1);
+        z-index: 10;
+        white-space: nowrap;
+        box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+        font-variant-numeric: tabular-nums;
+      }
+
       /* === Bottom Controls Bar === */
       .bottom-bar {
         flex-shrink: 0;
@@ -401,6 +420,7 @@
             <span class="vl-step random">1</span>
             Random Baseline
           </div>
+          <div class="temp-readout" id="temp-left">최고온도 —°C</div>
           <!-- Airflow Zone Legend (left viewport only) -->
           <div class="airflow-legend" id="airflow-legend" style="display:none;">
             <div class="af-legend-title">Airflow Zones</div>
@@ -426,6 +446,7 @@
             <span class="vl-step rl">2</span>
             RL (PPO) Optimized
           </div>
+          <div class="temp-readout" id="temp-right">최고온도 —°C</div>
         </div>
 
       </div>
