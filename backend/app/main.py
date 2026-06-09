@@ -9,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from app.api.endpoints import router
 from app.api.twin import router as twin_router
 from app.api.visualize import router as visualize_router
+from app.api.inference import router as inference_router
 
 app = FastAPI(
     title="HALO Backend",
@@ -35,6 +36,7 @@ async def _no_cache(request: Request, call_next):
 app.include_router(router, prefix="/api/v1")
 app.include_router(visualize_router, prefix="/api/v1")
 app.include_router(twin_router, prefix="/api/v1")
+app.include_router(inference_router, prefix="/api/v1")
 
 # Vendored three.js for the self-contained room editor (frontend/dist/editor.html imports
 # /vendor/three.module.js). Mounted before the "/" catch-all so it is not shadowed.
