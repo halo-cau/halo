@@ -43,9 +43,6 @@ from engine.core.config import (
     COOLING_AC_VENT,
     DEFAULT_AC_AIRFLOW_CFM,
     DEFAULT_AC_CAPACITY_KW,
-    DEFAULT_RACK_POWER_KW,
-    OBSTACLE_WALL,
-    RACK_BODY,
     RACK_DIMENSIONS,
     RACK_EXHAUST,
     RACK_INTAKE,
@@ -57,6 +54,7 @@ from engine.core.data_types import (
     RackFacing,
     RackPlacement,
 )
+from engine.thermal._rack_geometry import rack_bbox as _rack_bbox
 
 # ---------------------------------------------------------------------------
 # Tunable constants
@@ -591,44 +589,6 @@ def _world_to_index_solver(
         int(round((y - origin[1]) / VOXEL_SIZE)),
         int(round((z - origin[2]) / VOXEL_SIZE)),
     )
-
-
-def _rack_bbox(
-    rack: RackPlacement, origin: np.ndarray, grid_shape: tuple[int, ...],
-) -> tuple[int, int, int, int, int, int]:
-    """Return clamped (x0, x1, y0, y1, z0, z1) for a rack's full volume."""
-    dims = RACK_DIMENSIONS.get(rack.rack_type)
-    if dims is None:
-        return (0, 0, 0, 0, 0, 0)
-    rack_w, rack_d, rack_h = dims
-    vw = max(1, round(rack_w / VOXEL_SIZE))
-    vd = max(1, round(rack_d / VOXEL_SIZE))
-    vh = max(1, round(rack_h / VOXEL_SIZE))
-
-    cx, cy, cz = _world_to_index_solver(
-        rack.position.x, rack.position.y, rack.position.z, origin,
-    )
-    half_w = vw // 2
-    facing = rack.facing
-
-    if facing == RackFacing.PLUS_X:
-        x0, x1 = cx - vd + 1, cx + 1
-        y0, y1 = cy - half_w, cy - half_w + vw
-    elif facing == RackFacing.MINUS_X:
-        x0, x1 = cx, cx + vd
-        y0, y1 = cy - half_w, cy - half_w + vw
-    elif facing == RackFacing.PLUS_Y:
-        x0, x1 = cx - half_w, cx - half_w + vw
-        y0, y1 = cy - vd + 1, cy + 1
-    elif facing == RackFacing.MINUS_Y:
-        x0, x1 = cx - half_w, cx - half_w + vw
-        y0, y1 = cy, cy + vd
-    else:
-        return (0, 0, 0, 0, 0, 0)
-
-    z0, z1 = cz, cz + vh
-    sx, sy, sz = grid_shape
-    return (max(x0, 0), min(x1, sx), max(y0, 0), min(y1, sy), max(z0, 0), min(z1, sz))
 
 
 def _exhaust_delta_t(power_kw: float, airflow_cfm: float) -> float:
