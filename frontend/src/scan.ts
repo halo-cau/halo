@@ -239,6 +239,35 @@ function setStatus(msg: string, isError = false) {
   statusEl.className = isError ? "status error" : "status success";
 }
 
+// ── Progress bar (visible job feedback, driven by the pipeline's pct) ──
+const progressEl = document.createElement("div");
+progressEl.id = "twin-progress";
+progressEl.style.cssText = "display:none;margin-top:10px";
+progressEl.innerHTML = `
+  <div style="display:flex;justify-content:space-between;font:12px system-ui,-apple-system,sans-serif;color:#6b685f;margin-bottom:4px">
+    <span class="tp-step">queued</span><span class="tp-pct">0%</span>
+  </div>
+  <div style="height:10px;border-radius:6px;background:#eee9df;overflow:hidden">
+    <div class="tp-fill" style="height:100%;width:0;background:#378add;border-radius:6px;transition:width .35s ease"></div>
+  </div>`;
+statusEl.insertAdjacentElement("afterend", progressEl);
+const tpStep = progressEl.querySelector(".tp-step") as HTMLElement;
+const tpPct = progressEl.querySelector(".tp-pct") as HTMLElement;
+const tpFill = progressEl.querySelector(".tp-fill") as HTMLElement;
+
+// pct null hides the bar; otherwise fill to pct and label the current step.
+function setProgress(pct: number | null, step?: string): void {
+  if (pct === null) {
+    progressEl.style.display = "none";
+    return;
+  }
+  progressEl.style.display = "block";
+  const p = Math.max(0, Math.min(100, pct));
+  tpFill.style.width = `${p}%`;
+  tpPct.textContent = `${Math.round(p)}%`;
+  if (step) tpStep.textContent = step;
+}
+
 // ── Camera auto-fit (shared) ──────────────────────────────
 function fitCamera(obj: THREE.Object3D) {
   const box = new THREE.Box3().setFromObject(obj);
@@ -290,6 +319,7 @@ let twinJob: { id: string; outputs: Record<string, string> } | null = null;
 const TWIN_STAGE_KEY: Record<string, string> = {
   recon: "recon",
   semantic: "labeled",
+  sam3class: "classes",
   voxel: "voxel",
 };
 
@@ -307,6 +337,7 @@ function enableTwinTabs() {
   const avail: Record<string, boolean> = {
     recon: Boolean(out.recon),
     semantic: Boolean(out.labeled),
+    sam3class: Boolean(out.classes),
     voxel: Boolean(out.voxel),
     layout: false, // Layout / Thermal / ASHRAE land with the thermal stage (not yet emitted by the twin)
     thermal: false,
@@ -762,10 +793,12 @@ async function pollJob(jobId: string): Promise<void> {
       const resp = await fetch(`/api/v1/twin/${jobId}`);
       if (resp.status === 404) {
         clearJob();
+        setProgress(null);
         setStatus("Previous job is no longer on the server — upload again", true);
         return;
       }
       s = (await resp.json()) as TwinStatus;
+      setProgress(s.pct ?? 0, s.step);
       setStatus(
         `${s.step} — ${s.message ?? ""} (${s.pct ?? 0}%) · runs in the background; you can switch pages`,
       );
@@ -773,11 +806,13 @@ async function pollJob(jobId: string): Promise<void> {
       await new Promise((res) => setTimeout(res, 2000));
     }
     if (s.state === "error") {
+      setProgress(null);
       setStatus(`Error: ${s.error || s.message || "pipeline failed"}`, true);
       clearJob();
       return;
     }
 
+    setProgress(100, "done");
     mode = "twin";
     twinJob = { id: jobId, outputs: s.outputs ?? {} };
     setStatus("done — showing the voxel twin", false);
@@ -797,11 +832,14 @@ function resumeSavedJob(): void {
   void pollJob(saved.jobId);
 }
 
-// ── Upload handler (multi-view images OR one geometry scan -> async twin job) ──
-uploadBtn.addEventListener("click", async () => {
+// ── Submit the current file selection as an async twin job (multi-view images OR one geometry scan) ──
+async function startTwinJob(): Promise<void> {
   const files = Array.from(fileInput.files ?? []);
   if (files.length === 0) {
-    setStatus("Select ≥2 images, or one .obj/.ply/.las scan", true);
+    setStatus(
+      "Select ≥2 images, or one .obj/.ply/.las scan — or drag the files onto this panel",
+      true,
+    );
     return;
   }
 
@@ -809,6 +847,7 @@ uploadBtn.addEventListener("click", async () => {
   const fd = new FormData();
   for (const f of files) fd.append("files", f);
   setStatus("uploading…");
+  setProgress(2, "uploading");
 
   try {
     const r = await fetch("/api/v1/twin", { method: "POST", body: fd });
@@ -825,9 +864,41 @@ uploadBtn.addEventListener("click", async () => {
     );
     void pollJob(job_id);
   } catch (err: unknown) {
+    setProgress(null);
     setStatus(`Error: ${err instanceof Error ? err.message : String(err)}`, true);
     uploadBtn.disabled = false;
   }
+}
+
+uploadBtn.addEventListener("click", () => void startTwinJob());
+
+// Confirm the selection so the picker never looks like it did nothing.
+fileInput.addEventListener("change", () => {
+  const n = fileInput.files?.length ?? 0;
+  if (n > 0) setStatus(`${n} file${n === 1 ? "" : "s"} ready — click “Process Scan”`, false);
+});
+
+// ── Drag-and-drop: drop image/scan files anywhere on the page to load + start the job ──
+const dropPanel = document.querySelector(".panel") as HTMLElement | null;
+function highlightDrop(on: boolean): void {
+  if (dropPanel) dropPanel.style.outline = on ? "2px dashed #378add" : "";
+}
+document.addEventListener("dragover", (e) => {
+  e.preventDefault(); // required so the page accepts the drop instead of opening the file
+  highlightDrop(true);
+});
+document.addEventListener("dragleave", (e) => {
+  if ((e as DragEvent).relatedTarget === null) highlightDrop(false); // pointer left the window
+});
+document.addEventListener("drop", (e) => {
+  e.preventDefault();
+  highlightDrop(false);
+  const dropped = (e as DragEvent).dataTransfer?.files;
+  if (!dropped || dropped.length === 0) return;
+  const dt = new DataTransfer();
+  for (const f of Array.from(dropped)) dt.items.add(f);
+  fileInput.files = dt.files; // feed the same input the button reads, then process
+  void startTwinJob();
 });
 
 resumeSavedJob();

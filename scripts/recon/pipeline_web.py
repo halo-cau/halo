@@ -304,6 +304,8 @@ def main() -> int:
             st.set(message=f"labels: {counts}", label_counts=counts)
 
         outputs = {"recon": "recon.ply", "labeled": "labeled.ply", "legend": "labeled.legend.json"}
+        if (out / "labeled_class.ply").exists():
+            outputs["classes"] = "labeled_class.ply"   # pure SAM3 class vote, before per-instance split
         try:    # semantic voxelization -> editable manifest (non-fatal: recon+label stand on their own)
             st.set(step="voxelize", pct=95, message="semantic voxelization + editable manifest")
             sh([PY, "scripts/recon/voxelize_labeled_cloud.py", "--run", str(out)], log)

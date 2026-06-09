@@ -314,6 +314,7 @@ def main() -> int:
     log.info("lifted %d object points across %d classes: %s", len(P), n_obj, labels)
 
     rec_label = voxel_vote(recon_pts, P, L, n_obj, args.voxel)
+    class_vote = rec_label.copy()   # pure SAM3 object-class vote, BEFORE rack-instancing reassigns/splits
 
     # per-rack instance ids (geometric / sam3 methods only; dbscan handled inline)
     rack_inst = None
@@ -387,6 +388,32 @@ def main() -> int:
               "n_instances": inst_k}
     Path(args.out.with_suffix("").as_posix() + ".legend.json").write_text(json.dumps(legend, indent=2))
     log.info("wrote %s (%d instances); counts: %s", args.out, inst_k, counts)
+
+    # Pure SAM3 backprojection BEFORE the per-instance split: colour every recon point by its voted
+    # OBJECT class (all racks share one colour), unknown/structural left grey. This is the raw class
+    # vote the rack-instancing step then carves into instances — useful for judging SAM3 on its own.
+    class_colors = np.tile(np.array(STRUCT_COLOR["unknown"], np.float64), (len(recon_pts), 1))
+    cls_counts, cls_palette = {}, {}
+    for ci, canon in enumerate(labels):
+        sel = class_vote == ci
+        if not sel.any():
+            continue
+        col = instance_color(ci)
+        class_colors[sel] = col
+        cls_counts[canon] = int(sel.sum())
+        cls_palette[canon] = [round(x, 3) for x in col]
+    n_unk = int((class_vote == UNK).sum())
+    if n_unk:
+        cls_counts["unknown"] = n_unk
+        cls_palette["unknown"] = list(STRUCT_COLOR["unknown"])
+    class_out = args.out.parent / "labeled_class.ply"
+    trimesh.PointCloud(vertices=recon_pts.astype(np.float32),
+                       colors=(class_colors * 255).astype(np.uint8)).export(str(class_out))
+    (args.out.parent / "labeled_class.legend.json").write_text(json.dumps(
+        {"backend": "sam3_photo_class",
+         "label_counts": dict(sorted(cls_counts.items(), key=lambda x: -x[1])),
+         "palette": cls_palette}, indent=2))
+    log.info("wrote %s (pure SAM3 class vote: %s)", class_out.name, cls_counts)
     return 0
 
 
