@@ -145,3 +145,50 @@ def twin_restamp(job_id: str, payload: dict = Body(default={})) -> JSONResponse:
         raise HTTPException(500, f"restamp failed: {r.stderr[-800:]}")
     n = len(json.loads(pj.read_text()).get("instances", []))
     return JSONResponse({"ok": True, "n_instances": n, "log": r.stdout.strip()})
+
+
+@router.get("/twin/{job_id}/thermal")
+def twin_thermal(job_id: str) -> JSONResponse:
+    """Run the 3-D thermal engine on the job's DETECTED voxel room and return its ASHRAE TC 9.9 score.
+
+    Loads ``voxel_grid.npy`` + ``placements.json`` (the scanned twin), rebuilds the rack / cooling objects
+    from the manifest, and runs ``compute_thermal_field`` + ``compute_metrics`` -- the same engine as the
+    ``/visualize`` route, but on the twin's own grid rather than a re-voxelized mesh. The thermal engine is
+    numpy-only (no open3d / torch), so it is imported lazily here without breaking the API process's CV
+    boundary. This is the 'compute thermals on the detected room' step of the dashboard workflow."""
+    import numpy as np
+
+    from engine.core.data_types import Coordinate, CoolingUnit, RackFacing, RackPlacement
+    from engine.thermal.metrics import compute_metrics
+    from engine.thermal.solver import compute_thermal_field
+
+    d = RUNS / job_id
+    gp, pp = d / "voxel_grid.npy", d / "placements.json"
+    if not gp.exists() or not pp.exists():
+        raise HTTPException(404, "no voxel_grid.npy / placements.json for this job (run the twin first)")
+    grid = np.load(gp)
+    m = json.loads(pp.read_text())
+    origin = np.array(m.get("origin", [0.0, 0.0, 0.0]), float)
+    racks = [RackPlacement(position=Coordinate(*p["pos"]), facing=RackFacing[p["facing"]],
+                           rack_type=p.get("rack_type", "42U"))
+             for p in m.get("instances", []) if p.get("kind") == "rack"]
+    if not racks:
+        raise HTTPException(400, "no racks in this twin to analyse")
+    cooling = [CoolingUnit(position=Coordinate(*p["center"]), capacity_kw=12.0)
+               for p in m.get("instances", [])
+               if str(p.get("name", "")).startswith("ac_unit") or int(p.get("vox_id", -1)) == 3]
+    temp = compute_thermal_field(grid, racks, origin, cooling_units=cooling)
+    mr = compute_metrics(grid, temp, racks, origin, cooling)
+    return JSONResponse({
+        "n_racks": len(racks), "n_cooling": len(cooling),
+        "temp_mean_c": round(float(np.mean(temp)), 2), "temp_max_c": round(float(np.max(temp)), 2),
+        "compliant_racks": int(sum(r.inlet_compliant for r in mr.racks)),
+        "racks": [{"rack_index": r.rack_index, "intake_temp": round(r.intake_temp, 2),
+                   "exhaust_temp": round(r.exhaust_temp, 2), "delta_t": round(r.delta_t, 2),
+                   "inlet_compliant": bool(r.inlet_compliant),
+                   "inlet_within_allowable": bool(r.inlet_within_allowable)} for r in mr.racks],
+        "room": {"rci_hi": round(mr.room.rci_hi, 1), "rci_lo": round(mr.room.rci_lo, 1),
+                 "shi": round(mr.room.shi, 3), "rhi": round(mr.room.rhi, 3),
+                 "mean_intake": round(mr.room.mean_intake, 2), "mean_exhaust": round(mr.room.mean_exhaust, 2),
+                 "vertical_profile": [round(float(x), 2) for x in mr.room.vertical_profile]},
+    })

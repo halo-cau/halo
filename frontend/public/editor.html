@@ -53,9 +53,10 @@
       <h1>Room Editor <span id="job"></span></h1>
       <a class="back" href="./scan.html">← Viewer</a>
     </div>
-    <div class="hint">Click an object to select. Drag it on the floor to move. Press <b>Delete</b> or the ✕ to remove. Locked 🔒 objects (walls, fire-hose, power cabinet) are fixed. Then <b>Re-voxelize</b>.</div>
+    <div class="hint">Click an object to select; drag on the floor to move. On a rack the <b style="color:#2E73E8">blue</b> face is intake, the <b style="color:#E0402F">red</b> face is exhaust. <b>↻ Rotate</b> (or press <b>R</b>) turns the selected rack 90°. Press <b>Delete</b> or ✕ to remove. Locked 🔒 objects are fixed. Then <b>Re-voxelize</b>.</div>
     <div class="label">Instances</div>
     <div id="list"></div>
+    <button id="rotate" class="ghost" disabled>↻ Rotate rack 90°</button>
     <button id="revox" class="primary">Re-voxelize</button>
     <button id="reset" class="ghost">Reset edits</button>
     <div id="status">loading…</div>
@@ -68,7 +69,13 @@ import * as THREE from '/vendor/three.module.js';
 import { OrbitControls } from '/vendor/OrbitControls.js';
 
 const COL = { bg:0xF4F2EC, gridA:0xCFCCC4, gridB:0xE2DFD7, shell:0xB0ADA5,
-  edgeMov:0x5F5E5A, edgeFix:0xB0ADA5, edgeSel:0x378ADD, edgeBad:0xBC4B45 };
+  edgeMov:0x5F5E5A, edgeFix:0xB0ADA5, edgeSel:0x378ADD, edgeBad:0xBC4B45,
+  intake:0x2E73E8, exhaust:0xE0402F };
+// Rack facing: cycle +90° per rotate. FACE_ROTZ is the Z-rotation that maps a rack's local +Y face
+// (where the blue intake slab sits) onto the world facing direction; FACE_DIR is that unit direction.
+const FACING_CYCLE = ['PLUS_Y','MINUS_X','MINUS_Y','PLUS_X'];
+const FACE_ROTZ = { PLUS_Y:0, MINUS_X:Math.PI/2, MINUS_Y:Math.PI, PLUS_X:-Math.PI/2 };
+const FACE_DIR = { PLUS_X:[1,0], MINUS_X:[-1,0], PLUS_Y:[0,1], MINUS_Y:[0,-1] };
 
 const qs = new URLSearchParams(location.search);
 const JOB = qs.get('job') || 'pi3_chest32_final';
@@ -100,6 +107,35 @@ addEventListener('resize', resize);
 
 function colorOf(voxId){ const c = manifest.vox_color[String(voxId)] || [0.6,0.6,0.66]; return new THREE.Color(c[0],c[1],c[2]); }
 
+// Thin intake (blue, local +Y) and exhaust (red, local -Y) slabs on a rack body so the facing reads
+// at a glance. They are children of the rack mesh, so the rotate handler orients them for free.
+function addFaceSlabs(m, cw, cd, ch){
+  const T = 0.05;
+  const mk = (col, y) => { const s = new THREE.Mesh(new THREE.BoxGeometry(cw*0.98, T, ch*0.96),
+      new THREE.MeshBasicMaterial({ color: col })); s.position.set(0, y, 0); s.raycast = ()=>{};
+      m.add(s); return s; };
+  m.userData.intakeSlab = mk(COL.intake, cd/2);
+  m.userData.exhaustSlab = mk(COL.exhaust, -cd/2);
+}
+
+// Turn the selected rack 90° (intake→exhaust faces and footprint rotate together). Updates facing +
+// pos so a Re-voxelize stamps the rotated rack — the way to author a deliberately broken layout.
+function rotateSelected(){
+  if(!selected || selected.userData.inst.kind!=='rack') return;
+  const m = selected, inst = m.userData.inst;
+  const idx = FACING_CYCLE.indexOf(inst.facing || 'PLUS_Y');
+  const next = FACING_CYCLE[(idx + 1 + FACING_CYCLE.length) % FACING_CYCLE.length];
+  inst.facing = next; m.rotation.z = FACE_ROTZ[next];
+  const alongX = next==='PLUS_X' || next==='MINUS_X';
+  const {cw,cd,ch} = m.userData;
+  inst.dims = alongX ? [cd,cw,ch] : [cw,cd,ch];                         // world AABB for overlap/drag
+  const dir = FACE_DIR[next];
+  inst.pos = [inst.center[0] + dir[0]*cd/2, inst.center[1] + dir[1]*cd/2, 0]; // front(intake) face
+  updHud(); renderList(); checkOverlaps();
+}
+function updateRotateBtn(){ const b=document.getElementById('rotate');
+  if(b) b.disabled = !(selected && selected.userData.inst.kind==='rack'); }
+
 function buildScene(){
   const [ex,ey,ez] = manifest.ext;
   const shell = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(ex,ey,ez)),
@@ -109,14 +145,25 @@ function buildScene(){
   grid.rotation.x = Math.PI/2; grid.position.set(ex/2, ey/2, 0.001); scene.add(grid);
 
   for (const inst of manifest.instances){
-    const [w,d,h] = inst.dims;
-    const m = new THREE.Mesh(new THREE.BoxGeometry(w,d,h),
+    const isRack = inst.kind === 'rack';
+    const facing = inst.facing || 'PLUS_Y';
+    const alongX = facing === 'PLUS_X' || facing === 'MINUS_X';
+    // Canonical box in the rack's own frame (width along local X, depth along local Y); the mesh's
+    // Z-rotation then orients it. Non-racks keep their world-axis dims as-is.
+    const [cw,cd,ch] = (isRack && alongX) ? [inst.dims[1], inst.dims[0], inst.dims[2]] : inst.dims;
+    const m = new THREE.Mesh(new THREE.BoxGeometry(cw,cd,ch),
               new THREE.MeshLambertMaterial({ color:colorOf(inst.vox_id), transparent:true,
                 opacity: inst.movable ? 0.85 : 0.6 }));
     m.position.set(inst.center[0], inst.center[1], inst.center[2]);
     const edge = new THREE.LineSegments(new THREE.EdgesGeometry(m.geometry),
           new THREE.LineBasicMaterial({ color: inst.movable ? COL.edgeMov : COL.edgeFix }));
-    m.add(edge); m.userData.inst = inst; m.userData.edge = edge; scene.add(m); boxes.push(m);
+    m.add(edge); m.userData.inst = inst; m.userData.edge = edge;
+    if (isRack){
+      m.rotation.z = FACE_ROTZ[facing] ?? 0;
+      m.userData.cw = cw; m.userData.cd = cd; m.userData.ch = ch;
+      addFaceSlabs(m, cw, cd, ch);   // blue intake at local +Y, red exhaust at local -Y
+    }
+    scene.add(m); boxes.push(m);
   }
   const c = new THREE.Vector3(ex/2, ey/2, ez/2); const r = Math.max(ex,ey,ez);
   camera.position.set(c.x + r*0.7, c.y - r*0.9, c.z + r*0.8); camera.far = r*40; camera.updateProjectionMatrix();
@@ -137,7 +184,7 @@ function renderList(){
   }
 }
 
-function select(m){ if(selected) setHL(selected,false); selected = m; if(m) setHL(m,true); renderList(); updHud(); }
+function select(m){ if(selected) setHL(selected,false); selected = m; if(m) setHL(m,true); renderList(); updHud(); updateRotateBtn(); }
 function edgeColor(m){ return m===selected ? COL.edgeSel : (m.userData.overlap ? COL.edgeBad
   : (m.userData.inst.movable ? COL.edgeMov : COL.edgeFix)); }
 function setHL(m, on){ m.material.opacity = on ? 0.95 : (m.userData.inst.movable?0.85:0.6);
@@ -180,7 +227,9 @@ canvas.addEventListener('pointermove', (e)=>{ if(!dragging||!selected) return; s
   }
 });
 addEventListener('pointerup', ()=>{ if(dragging){ dragging=false; controls.enabled=true; } });
-addEventListener('keydown', (e)=>{ if((e.key==='Delete'||e.key==='Backspace') && selected && selected.userData.inst.movable) removeBox(selected); });
+addEventListener('keydown', (e)=>{ if((e.key==='Delete'||e.key==='Backspace') && selected && selected.userData.inst.movable) removeBox(selected);
+  else if((e.key==='r'||e.key==='R') && selected && selected.userData.inst.kind==='rack') rotateSelected(); });
+document.getElementById('rotate').addEventListener('click', rotateSelected);
 
 document.getElementById('revox').addEventListener('click', async ()=>{
   const nov = checkOverlaps();

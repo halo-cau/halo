@@ -242,6 +242,13 @@
     <div class="page">
       <div class="scene-picker" id="scene-picker"></div>
 
+      <!-- Detected-room thermal: runs the real 3D engine on the scanned twin's voxel_grid (GET
+           /api/v1/twin/{id}/thermal) and shows its ASHRAE score. Wired in dashboard.ts. -->
+      <div class="detected-thermal-bar" style="display:flex;align-items:center;gap:12px;margin:8px 0;">
+        <button type="button" id="compute-thermal-btn" class="scene-btn">스캔한 방의 열·ASHRAE 계산</button>
+        <span id="detected-thermal" style="font-size:12px;color:var(--text-2);"></span>
+      </div>
+
       <!-- Top status bar -->
       <div class="status-bar" id="status-bar"></div>
 
