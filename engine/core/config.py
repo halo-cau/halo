@@ -95,8 +95,15 @@ RACK_DIMENSIONS: dict[str, tuple[float, float, float]] = {
     "42U_deep": (0.60, 1.20, 2.00),  # 42U × 600mm wide × 1200mm deep
     "42U_wide": (0.75, 1.00, 2.00),  # 42U × 750mm wide × 1000mm deep
     "48U": (0.60, 1.00, 2.26),   # 48U × 600mm wide × 1000mm deep
+    # Measured server-room prior (target room): 600mm W × 900mm D × 1950mm H. Used by the CV/twin
+    # voxelizer to anchor metric scale on the rack HEIGHT and to stamp racks at the true size; kept
+    # separate from "42U" so the trained RL footprint is not disturbed.
+    "42U_real": (0.60, 0.90, 1.95),
 }
 DEFAULT_RACK_TYPE: str = "42U"
+# Standalone NETWORK rack prior (taller than a 42U): width 600mm × depth 750mm × height 2200mm.
+NETWORK_RACK_DIMENSIONS: tuple[float, float, float] = (0.60, 0.75, 2.20)
+NETWORK_RACK_HEIGHT: float = NETWORK_RACK_DIMENSIONS[2]
 
 # ASHRAE TC 9.9 recommended inlet temperature range (°C) for A1-class.
 ASHRAE_INLET_TEMP_RANGE: tuple[float, float] = (18.0, 27.0)

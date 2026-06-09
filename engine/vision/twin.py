@@ -104,7 +104,7 @@ def build_twin(run_dir, *, scan=None, **voxel_kw):
     run_dir = Path(run_dir)
     if scan is not None:
         geometry_to_labeled_cloud(scan, run_dir)
-        # LAS/LAZ scans are already in metres -> skip the up-to-scale rack-width anchor.
+        # LAS/LAZ scans are already in metres -> skip the up-to-scale CV scale recovery (already metric).
         voxel_kw.setdefault("metric", Path(scan).suffix.lower() in {".las", ".laz"})
     if not (run_dir / "labeled.ply").exists():
         raise FileNotFoundError(

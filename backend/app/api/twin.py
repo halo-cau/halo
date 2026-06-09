@@ -50,8 +50,8 @@ def _worker() -> None:
         if p["kind"] == "images":
             # The proven June-6 chest32 recipe: all 32 frames @245k px reproduce the reconstruction
             # byte-for-byte (run_pi3 is deterministic), and SAM3 instancing matches that run. The
-            # voxelizer then anchors metric scale on the rack-ROW width (robust to the instance split)
-            # and recovers the occluded depth from rack priors, so the drop-in lands on the target room.
+            # voxelizer then recovers the metric room from the CV alone (per-axis scale from the rack
+            # cuboid + the detected walls); no room dimensions are passed, so the default generalises.
             cmd = [HALO_PY, str(PIPELINE), "--images", str(d / "input"), "--out", str(d),
                    "--model", p.get("model", "pi3"),
                    "--pi3-frames", "32", "--pi3-pixel-limit", "245000", "--rack-instancing", "sam3"]
