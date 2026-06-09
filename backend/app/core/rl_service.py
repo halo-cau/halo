@@ -26,18 +26,20 @@ class RLService:
 
         self.lock = threading.Lock()
 
-    def optimize(self, obstacle, cooling_pos, rack_num):
+    def optimize(self, obstacle, cooling_pos, rack_num, ceiling_m=None):
         with self.lock:
             raw_env = self.env.unwrapped.envs[0]
 
-            # 1. 원본 환경에 변수 설정 및 초기화
-            obs = raw_env.reset(
-                options={
-                    "obstacle": np.array(obstacle),
-                    "cooling_pos": np.array(cooling_pos),
-                    "rack_num": rack_num,
-                }
-            )
+            # 1. 원본 환경에 변수 설정 및 초기화. ceiling_m (the scanned room height from the CV->RL
+            #    twin_bridge converter) reaches the 3-D thermal solve via reset; None keeps the env default.
+            opts = {
+                "obstacle": np.array(obstacle),
+                "cooling_pos": np.array(cooling_pos),
+                "rack_num": rack_num,
+            }
+            if ceiling_m is not None:
+                opts["ceiling_m"] = float(ceiling_m)
+            obs = raw_env.reset(options=opts)
             if isinstance(obs, tuple):
                 obs = obs[0]
 

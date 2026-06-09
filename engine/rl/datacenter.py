@@ -151,6 +151,14 @@ class DataCenterEnv(gym.Env):
             )
             self.num_cooler = len(self.cooling_pos)
             self.rack_num = options.get("rack_num", self.rack_num)
+            # The policy is a 2-D BEV agent, but the end-of-episode thermal solve is 3-D, so the SCANNED
+            # room height must reach the ThermalBridge. ceiling_m is not in the obs/action/reward space,
+            # so rebuilding the bridge here does not affect the trained policy -- only the thermal result.
+            cm = options.get("ceiling_m")
+            if cm is not None and abs(float(cm) - self.ceiling_m) > 1e-6:
+                from engine.rl.thermal_bridge import ThermalBridge
+                self.ceiling_m = float(cm)
+                self._bridge = ThermalBridge(grid_size=self.grid_size, ceiling_m=self.ceiling_m)
         else:
             self.obstacle = self._generate_layout()
             free_mask = self.obstacle == 0
