@@ -5,6 +5,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { PLYLoader } from "three/addons/loaders/PLYLoader.js";
+import { clearJob, loadSavedJob, saveJob, type TwinStatus } from "./lib/twinJob";
 
 // ── DOM refs ──────────────────────────────────────────────
 const canvas = document.getElementById("viewer") as HTMLCanvasElement;
@@ -739,38 +740,13 @@ stageBtns.addEventListener("click", (e) => {
   if (btn) setActiveStage(btn.getAttribute("data-stage")!);
 });
 
-// ── Twin job types ────────────────────────────────────────
-interface TwinStatus {
-  state: string;
-  step: string;
-  message?: string;
-  pct?: number;
-  outputs?: Record<string, string>;
-  error?: string;
-}
-
 // ── Background twin job: survives page navigation ─────────
-// The GPU pipeline (Pi3 + SAM3) is multi-minute and runs server-side in an isolated subprocess (a
-// single backend worker serializes jobs; progress is written to status.json on disk). So the browser
-// does NOT need to stay on this page: we persist the job id in localStorage, poll in a resumable way,
-// and reconnect on load. You can submit images, leave for any other page, and the twin will be waiting
-// when you return — whether it is still running or already finished.
-const ACTIVE_JOB_KEY = "halo.twin.job";
-
-function saveJob(jobId: string, kind: string): void {
-  localStorage.setItem(ACTIVE_JOB_KEY, JSON.stringify({ jobId, kind }));
-}
-function loadSavedJob(): { jobId: string; kind: string } | null {
-  try {
-    const v = localStorage.getItem(ACTIVE_JOB_KEY);
-    return v ? (JSON.parse(v) as { jobId: string; kind: string }) : null;
-  } catch {
-    return null;
-  }
-}
-function clearJob(): void {
-  localStorage.removeItem(ACTIVE_JOB_KEY);
-}
+// The GPU pipeline (Pi3 + SAM3) is multi-minute and runs server-side in an isolated subprocess (a single
+// backend worker serializes jobs; progress is written to status.json on disk). So the browser does NOT
+// need to stay on this page: the job id is persisted in localStorage (lib/twinJob), we poll in a
+// resumable way, and reconnect on load. Submit images, leave for any other page, and the twin will be
+// waiting when you return. The same persisted job also drives the cross-page progress badge
+// (lib/twinIndicator) shown on every other page.
 
 let polling = false;
 

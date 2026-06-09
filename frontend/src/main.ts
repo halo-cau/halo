@@ -1,16 +1,13 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import "./lib/twinIndicator";
 import { AirflowSystem } from "./components/airflow";
 import { createEquipmentMesh } from "./components/equipment";
 import { buildHeatmap } from "./components/heatmap";
-import { computeAshraeMetrics } from "./lib/ashrae";
 import { buildRoom } from "./components/room";
 import { buildZones } from "./components/zones";
-import {
-  allScenes,
-  getLoadFactor,
-  type SceneGraph,
-} from "./data/sceneGraphs";
+import { allScenes, getLoadFactor, type SceneGraph } from "./data/sceneGraphs";
+import { computeAshraeMetrics } from "./lib/ashrae";
 
 // ===== Shared simulation state =====
 let simPlaying = false;

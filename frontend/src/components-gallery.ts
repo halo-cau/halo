@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import "./lib/twinIndicator";
 import { AirflowSystem } from "./components/airflow";
 import { createEquipmentMesh } from "./components/equipment";
 import { buildHeatmap } from "./components/heatmap";

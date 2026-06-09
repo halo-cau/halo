@@ -3,6 +3,7 @@
 // The "랙별 상세" table from the mock is intentionally omitted.
 
 import * as echarts from "echarts";
+import "./lib/twinIndicator";
 import {
   allScenes,
   coolingEnergyBase,
