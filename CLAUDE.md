@@ -28,8 +28,14 @@ and many comments are Korean.
   entry on the path is what makes `from app...` imports resolve.
   - Single file: `pytest tests/test_voxelizer.py`
   - Single test: `pytest tests/test_voxelizer.py::test_name` or by keyword `pytest -k voxel`
-- Backend API: from `backend/`, `uvicorn app.main:app --reload --port 8000`. Install deps with
-  `pip install -r backend/requirements.txt`.
+- Backend API: from the **repo root**, `PYTHONPATH=backend uvicorn app.main:app --reload --port 8000`.
+  It must run from the repo root because `app/core/rl_service.py` loads `engine/rl/model.zip` /
+  `vecnormalize.pkl` via repo-root-relative paths; `PYTHONPATH=backend` makes the `app.*` imports
+  resolve. Install deps with `pip install -r backend/requirements.txt` (includes `stable-baselines3` +
+  `sb3-contrib` for the RL `/inference` route). If those RL deps are absent the app still boots and the
+  inference router is skipped with a logged warning — the CV `/twin`, `/visualize`, `/process-scan`
+  routes do not depend on the RL stack. The backend runs in the `halo` conda env (the env that has
+  fastapi + open3d + trimesh together).
 
 ### Frontend (`frontend/`, pnpm + Vite + Biome)
 - `pnpm dev` (Vite dev server, proxies `/api` → `http://127.0.0.1:8000`) — `pnpm build` → `frontend/dist/`
@@ -95,7 +101,15 @@ fast-2D and authoritative-3D paths stay comparable.
 
 ## Integration state (branches)
 
-Active multi-author branches converging toward `master`:
+`feat/integration` is the merged branch: it branches off the updated `master` and merges both `feat/cv`
+(CV/twin) and `feat/split-view` (RL serving + split-view UI). `main.py` wires all four routers
+(endpoints + visualize + twin + inference); `engine/core/config.py` uses split-view's `(100,100,50)`
+grid to match the trained RL policy; the CV constants and the unified twin pipeline are retained. A
+direct consequence of that grid: the CV/twin pipeline now caps rooms at ~10×10×5 m (was 20×20×6) and
+rejects larger scans with "Room too large for the RL observation space" — confirm a real scanned room
+fits before relying on it.
+
+Source branches that converged here:
 - `master` — integration target; latest has the presentation deck + batch optimization.
 - `feat/cv` (current) — the vision/twin pipeline; **deletes** the RL backend serving files and wires
   `twin_router` in `main.py`.

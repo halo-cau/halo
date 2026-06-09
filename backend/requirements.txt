@@ -17,3 +17,6 @@ lazrs>=0.8.0
 numpy>=1.26.0
 torch>=2.0.0
 gymnasium>=0.29.0
+# RL policy serving (backend/app/core/rl_service.py loads a MaskablePPO model)
+stable-baselines3>=2.0.0
+sb3-contrib>=2.0.0
