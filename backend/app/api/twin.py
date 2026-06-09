@@ -30,6 +30,11 @@ RESTAMP = REPO / "scripts" / "recon" / "restamp_room.py"
 # The GPU pipeline (pi3 + SAM3) lives in the `halo` conda env; the API process need not. Override with
 # the HALO_PY env var if the interpreter path differs.
 HALO_PY = os.environ.get("HALO_PY", "/home/ppco915/ENTER/envs/halo/bin/python")
+# A precomputed twin run can stand in for the live pipeline during a walkthrough: the multi-view
+# reconstruction (Pi3) + segmentation (SAM3) over ~1M points takes several minutes on the GPU, too long
+# to run in front of an audience. When TWIN_PRECOMPUTED_SAMPLE names such a run, submitted jobs are served
+# from it and flagged ``precomputed``; unset (the default) every job runs the real pipeline.
+PRECOMPUTED_SAMPLE = os.environ.get("TWIN_PRECOMPUTED_SAMPLE", "").strip()
 
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".heic", ".heif", ".bmp", ".tif", ".tiff", ".webp"}
 GEOMETRY_SUFFIXES = {".obj", ".ply", ".las", ".laz"}
@@ -42,16 +47,42 @@ def _env() -> dict:
                 PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True", PYOPENGL_PLATFORM="egl")
 
 
+def _serve_precomputed(sample: Path, dst: Path) -> None:
+    """Serve a precomputed twin run's artifacts for a job and flag it ``precomputed``.
+
+    Lets a live walkthrough skip the multi-minute Pi3 + SAM3 GPU pipeline (see TWIN_PRECOMPUTED_SAMPLE).
+    The recon / labeled / point_labels / voxel artifacts of the sample run are copied into the new job
+    dir unchanged; the real pipeline is the default whenever no sample is configured."""
+    import shutil
+    for f in sample.iterdir():
+        if f.is_file():
+            shutil.copy2(f, dst / f.name)
+    sj = dst / "status.json"
+    st = json.loads(sj.read_text()) if sj.exists() else {}
+    st.update({"state": "done", "step": "done", "pct": 100, "precomputed": True,
+               "message": "precomputed sample (Pi3 + SAM3 pipeline pre-run)"})
+    sj.write_text(json.dumps(st))
+
+
 def _worker() -> None:
     """Serialize jobs: run one pipeline subprocess (in halo) at a time so the single GPU never thrashes."""
     while True:
         job_id, p = _jobs.get()
         d = RUNS / job_id
+        if PRECOMPUTED_SAMPLE and (RUNS / PRECOMPUTED_SAMPLE).is_dir():
+            try:                                               # demo mode: skip the multi-minute pipeline
+                _serve_precomputed(RUNS / PRECOMPUTED_SAMPLE, d)
+            except Exception as e:  # noqa: BLE001 — never let one bad job kill the daemon worker
+                (d / "status.json").write_text(json.dumps(
+                    {"state": "error", "step": "precomputed", "pct": 0,
+                     "message": "precomputed serve failed", "error": str(e), "outputs": {}}))
+            finally:
+                _jobs.task_done()
+            continue
         if p["kind"] == "images":
-            # The proven June-6 chest32 recipe: all 32 frames @245k px reproduce the reconstruction
-            # byte-for-byte (run_pi3 is deterministic), and SAM3 instancing matches that run. The
-            # voxelizer then recovers the metric room from the CV alone (per-axis scale from the rack
-            # cuboid + the detected walls); no room dimensions are passed, so the default generalises.
+            # Multi-view front: Pi3 reconstruction + SAM3 per-instance segmentation, then the shared
+            # voxelizer recovers the metric room from the CV alone (per-axis scale from the rack cuboid +
+            # the detected walls). No room dimensions are passed.
             cmd = [HALO_PY, str(PIPELINE), "--images", str(d / "input"), "--out", str(d),
                    "--model", p.get("model", "pi3"),
                    "--pi3-frames", "32", "--pi3-pixel-limit", "245000", "--rack-instancing", "sam3"]
@@ -103,6 +134,21 @@ async def create_twin(files: list[UploadFile] = File(...)) -> dict:
         {"state": "queued", "step": "queued", "pct": 0, "message": "queued", "outputs": {}, "kind": kind}))
     _jobs.put((job_id, p))
     return {"job_id": job_id, "kind": kind}
+
+
+@router.get("/twin/precomputed")
+def twin_precomputed() -> JSONResponse:
+    """Report the precomputed twin sample available to stand in for the live pipeline (demo mode).
+
+    Returns the configured sample's id + a summary, or ``enabled: false`` in the normal case where none
+    is set and every submitted job runs the real Pi3 + SAM3 pipeline. (Declared before /twin/{job_id} so
+    the literal path is not captured as a job id.)"""
+    samples = []
+    if PRECOMPUTED_SAMPLE and (RUNS / PRECOMPUTED_SAMPLE / "status.json").exists():
+        st = json.loads((RUNS / PRECOMPUTED_SAMPLE / "status.json").read_text())
+        samples.append({"id": PRECOMPUTED_SAMPLE, "outputs": list(st.get("outputs", {}).keys()),
+                        "label_counts": st.get("label_counts", {})})
+    return JSONResponse({"enabled": bool(samples), "samples": samples})
 
 
 @router.get("/twin/{job_id}")
