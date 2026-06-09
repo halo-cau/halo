@@ -39,6 +39,21 @@ RANSAC_DISTANCE_THRESHOLD: float = 0.02
 RANSAC_NUM_POINTS: int = 3
 RANSAC_NUM_ITERATIONS: int = 1000
 
+# --- Manhattan World Rectification (iterative RANSAC plane extraction) ---
+# Plane normal must lie within this angle of a principal axis to qualify as a
+# structural wall / floor / ceiling.
+MANHATTAN_NORMAL_TOL_DEG: float = 25.0
+# Maximum number of dominant planes extracted in one pass.
+MANHATTAN_MAX_PLANES: int = 12
+# RANSAC inlier distance: vertices within this distance of the fitted plane
+# are treated as members of that structural surface. Tight (3 cm) so objects
+# protruding from walls (AC units, door frames, racks) are NOT included.
+MANHATTAN_PLANE_INLIER_DIST_M: float = 0.03
+# A plane must contain at least this fraction of total vertices to be
+# considered structural. Filters out small object faces (rack panels, cabinet
+# sides).
+MANHATTAN_MIN_PLANE_INLIER_FRAC: float = 0.01
+
 # --- Morphological Closing ---
 CLOSING_ITERATIONS: int = 2
 
@@ -51,6 +66,11 @@ STAMP_RADIUS_VOXELS: int = 3
 
 # --- Workspace (desk) dimensions in metres ---
 WORKSPACE_DIMENSIONS: tuple[float, float, float] = (1.2, 0.6, 0.75)  # width, depth, height
+
+# --- Canonical AC unit dimensions in metres ---
+# Width × depth × height. Used as the prior when stamping detected AC units
+# so the voxelized AC is a solid block, not a hollow point-cloud shell.
+AC_UNIT_DIMENSIONS: tuple[float, float, float] = (1.5, 0.5, 2.0)
 
 # --- ASHRAE Standard Rack Dimensions (metres) ---
 # Based on EIA-310 / ASHRAE TC 9.9 standard 19" server racks.

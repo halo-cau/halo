@@ -1,9 +1,10 @@
 /**
- * Scan Viewer — upload .obj, call /api/v1/visualize, render GLB in Three.js.
+ * Scan Viewer — upload scan files, call /api/v1/visualize, render GLB in Three.js.
  */
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { PLYLoader } from "three/addons/loaders/PLYLoader.js";
 
 // ── DOM refs ──────────────────────────────────────────────
 const canvas = document.getElementById("viewer") as HTMLCanvasElement;
@@ -14,7 +15,14 @@ const statusEl = document.getElementById("status") as HTMLDivElement;
 const stageBtns = document.getElementById("stage-btns") as HTMLDivElement;
 const legendEl = document.getElementById("legend") as HTMLDivElement;
 const metricsPanel = document.getElementById("metrics-panel") as HTMLDivElement;
-const demoBtn = document.getElementById("demo-btn") as HTMLButtonElement;
+const editBtn = document.getElementById("edit-btn") as HTMLButtonElement;
+const SUPPORTED_SCAN_EXTENSIONS = [".obj", ".ply", ".las", ".laz"];
+const SUPPORTED_SCAN_EXTENSIONS_TEXT = ".obj, .ply, .las";
+
+function isSupportedScanFile(file: File): boolean {
+  const name = file.name.toLowerCase();
+  return SUPPORTED_SCAN_EXTENSIONS.some((ext) => name.endsWith(ext));
+}
 
 // ── Three.js setup ────────────────────────────────────────
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
@@ -117,6 +125,7 @@ interface VisualizeResult {
   cleaned_glb: string;
   semantic_glb: string | null;
   voxel_grid: VoxelData | null;
+  layout_voxel_grid: VoxelData | null;
   thermal: ThermalData | null;
   metrics: MetricsData | null;
 }
@@ -148,7 +157,7 @@ function clearMesh() {
   if (meshGroup) {
     scene.remove(meshGroup);
     meshGroup.traverse((child) => {
-      if (child instanceof THREE.Mesh) {
+      if (child instanceof THREE.Mesh || child instanceof THREE.Points) {
         child.geometry.dispose();
         if (Array.isArray(child.material)) {
           for (const m of child.material) m.dispose();
@@ -196,6 +205,13 @@ function loadGlb(b64: string) {
               depthWrite: false,
             });
           }
+        } else if (child instanceof THREE.Points) {
+          child.material = new THREE.PointsMaterial({
+            color: 0x88aacc,
+            size: 0.04,
+            sizeAttenuation: true,
+            vertexColors: Boolean(child.geometry.attributes.color),
+          });
         }
       });
       meshGroup!.add(gltf.scene);
@@ -205,10 +221,11 @@ function loadGlb(b64: string) {
       const box = new THREE.Box3().setFromObject(meshGroup!);
       const center = box.getCenter(new THREE.Vector3());
       const size = box.getSize(new THREE.Vector3());
-      const maxDim = Math.max(size.x, size.y, size.z);
+      const maxDim = Math.max(size.x, size.y, size.z, 1);
       camera.position.copy(center.clone().add(new THREE.Vector3(maxDim, maxDim * 0.8, maxDim)));
       controls.target.copy(center);
       controls.update();
+      resize();
     },
     (err) => {
       setStatus(`GLB parse error: ${err}`, true);
@@ -219,6 +236,83 @@ function loadGlb(b64: string) {
 function setStatus(msg: string, isError = false) {
   statusEl.textContent = msg;
   statusEl.className = isError ? "status error" : "status success";
+}
+
+// ── Camera auto-fit (shared) ──────────────────────────────
+function fitCamera(obj: THREE.Object3D) {
+  const box = new THREE.Box3().setFromObject(obj);
+  const center = box.getCenter(new THREE.Vector3());
+  const size = box.getSize(new THREE.Vector3());
+  const maxDim = Math.max(size.x, size.y, size.z, 1);
+  camera.position.copy(center.clone().add(new THREE.Vector3(maxDim, maxDim * 0.8, maxDim)));
+  controls.target.copy(center);
+  controls.update();
+  resize();
+}
+
+// ── PLY renderer (twin stages: recon / SAM3 labels / voxel) ──
+const plyLoader = new PLYLoader();
+function loadPly(url: string) {
+  clearMesh();
+  setStatus(`loading ${url.split("/").pop()} …`);
+  plyLoader.load(
+    url,
+    (geo) => {
+      const hasColor = Boolean(geo.getAttribute("color"));
+      const pts = new THREE.Points(
+        geo,
+        // screen-pixel points (NOT world-size) so the 0.1 m voxel grid reads as a solid room at scale,
+        // exactly like the recon_web viewer the scenes were aligned in.
+        new THREE.PointsMaterial({
+          size: 2.5,
+          sizeAttenuation: false,
+          vertexColors: hasColor,
+          color: hasColor ? 0xffffff : 0x88aacc,
+        }),
+      );
+      meshGroup = new THREE.Group();
+      meshGroup.add(pts);
+      scene.add(meshGroup);
+      fitCamera(meshGroup);
+      setStatus("", false);
+    },
+    undefined,
+    (err) => setStatus(`PLY load error: ${err}`, true),
+  );
+}
+
+// ── Twin (multi-view CV pipeline) state ───────────────────
+type ViewMode = "mesh" | "twin";
+let mode: ViewMode = "mesh";
+let twinJob: { id: string; outputs: Record<string, string> } | null = null;
+// twin stage -> the outputs key whose artifact it renders
+const TWIN_STAGE_KEY: Record<string, string> = { recon: "recon", semantic: "labeled", voxel: "voxel" };
+
+function twinArtifactUrl(stage: string): string | null {
+  const key = TWIN_STAGE_KEY[stage];
+  const name = key && twinJob ? twinJob.outputs[key] : undefined;
+  return name ? `/api/v1/twin/${twinJob!.id}/artifact/${name}` : null;
+}
+
+function enableTwinTabs() {
+  if (!twinJob) return;
+  stageBtns.style.display = "flex";
+  editBtn.style.display = "block"; // the per-instance editor reads placements.json, which only twin jobs emit
+  const out = twinJob.outputs;
+  const avail: Record<string, boolean> = {
+    recon: Boolean(out.recon),
+    semantic: Boolean(out.labeled),
+    voxel: Boolean(out.voxel),
+    layout: false, // Layout / Thermal / ASHRAE land with the thermal stage (not yet emitted by the twin)
+    thermal: false,
+    ashrae: false,
+  };
+  stageBtns.querySelectorAll(".stage-btn").forEach((b) => {
+    const st = b.getAttribute("data-stage") ?? "";
+    const ok = avail[st] ?? false;
+    (b as HTMLElement).style.opacity = ok ? "1" : "0.3";
+    (b as HTMLElement).style.pointerEvents = ok ? "auto" : "none";
+  });
 }
 
 // ── Voxel grid renderer ──────────────────────────────────
@@ -279,10 +373,11 @@ function loadVoxelGrid(data: VoxelData) {
   const box = new THREE.Box3().setFromObject(meshGroup);
   const center = box.getCenter(new THREE.Vector3());
   const size = box.getSize(new THREE.Vector3());
-  const maxDim = Math.max(size.x, size.y, size.z);
+  const maxDim = Math.max(size.x, size.y, size.z, 1);
   camera.position.copy(center.clone().add(new THREE.Vector3(maxDim, maxDim * 0.8, maxDim)));
   controls.target.copy(center);
   controls.update();
+  resize();
 }
 
 // ── Thermal heatmap renderer ─────────────────────────────
@@ -393,10 +488,11 @@ function loadThermalGrid(voxel: VoxelData, thermal: ThermalData) {
   const box = new THREE.Box3().setFromObject(meshGroup);
   const center = box.getCenter(new THREE.Vector3());
   const size = box.getSize(new THREE.Vector3());
-  const maxDim = Math.max(size.x, size.y, size.z);
+  const maxDim = Math.max(size.x, size.y, size.z, 1);
   camera.position.copy(center.clone().add(new THREE.Vector3(maxDim, maxDim * 0.8, maxDim)));
   controls.target.copy(center);
   controls.update();
+  resize();
 }
 
 // ── ASHRAE metrics overlay renderer ──────────────────────
@@ -497,10 +593,11 @@ function loadMetricsOverlay(voxel: VoxelData, thermal: ThermalData, metrics: Met
   const box = new THREE.Box3().setFromObject(meshGroup);
   const center = box.getCenter(new THREE.Vector3());
   const size = box.getSize(new THREE.Vector3());
-  const maxDim = Math.max(size.x, size.y, size.z);
+  const maxDim = Math.max(size.x, size.y, size.z, 1);
   camera.position.copy(center.clone().add(new THREE.Vector3(maxDim, maxDim * 0.8, maxDim)));
   controls.target.copy(center);
   controls.update();
+  resize();
 
   // Populate metrics panel
   renderMetricsPanel(metrics);
@@ -561,6 +658,21 @@ function renderMetricsPanel(m: MetricsData) {
 
 // ── Stage switching ───────────────────────────────────────
 function setActiveStage(stage: string) {
+  if (mode === "twin") {
+    const url = twinArtifactUrl(stage);
+    if (!url) {
+      setStatus(`No "${stage}" stage for this job`, true);
+      return;
+    }
+    loadPly(url);
+    stageBtns.querySelectorAll(".stage-btn").forEach((btn) => {
+      btn.classList.toggle("active", btn.getAttribute("data-stage") === stage);
+    });
+    legendEl.style.display = "none";
+    metricsPanel.style.display = "none";
+    return;
+  }
+
   if (!result) return;
 
   if (stage === "voxel") {
@@ -569,6 +681,12 @@ function setActiveStage(stage: string) {
       return;
     }
     loadVoxelGrid(result.voxel_grid);
+  } else if (stage === "layout") {
+    if (!result.layout_voxel_grid) {
+      setStatus("No layout grid available", true);
+      return;
+    }
+    loadVoxelGrid(result.layout_voxel_grid);
   } else if (stage === "thermal") {
     if (!result.voxel_grid || !result.thermal) {
       setStatus("No thermal data available", true);
@@ -602,9 +720,11 @@ function setActiveStage(stage: string) {
     btn.classList.toggle("active", btn.getAttribute("data-stage") === stage);
   });
 
-  // Show legend for semantic, voxel, and thermal stages
+  // Show legend for semantic, voxel, layout, and thermal stages
   legendEl.style.display =
-    stage === "semantic" || stage === "voxel" || stage === "thermal" ? "block" : "none";
+    stage === "semantic" || stage === "voxel" || stage === "layout" || stage === "thermal"
+      ? "block"
+      : "none";
 
   // Show metrics panel only on ASHRAE stage
   metricsPanel.style.display = stage === "ashrae" ? "block" : "none";
@@ -615,145 +735,65 @@ stageBtns.addEventListener("click", (e) => {
   if (btn) setActiveStage(btn.getAttribute("data-stage")!);
 });
 
-// ── Upload handler ────────────────────────────────────────
-uploadBtn.addEventListener("click", async () => {
-  const file = fileInput.files?.[0];
-  if (!file) {
-    setStatus("Please select an .obj file", true);
-    return;
-  }
+// ── Twin job types ────────────────────────────────────────
+interface TwinStatus {
+  state: string;
+  step: string;
+  message?: string;
+  pct?: number;
+  outputs?: Record<string, string>;
+  error?: string;
+}
 
-  const metaText = metaInput.value.trim() || "{}";
-  try {
-    JSON.parse(metaText);
-  } catch {
-    setStatus("Invalid JSON in metadata field", true);
+// ── Upload handler (multi-view images OR one geometry scan -> async twin job) ──
+uploadBtn.addEventListener("click", async () => {
+  const files = Array.from(fileInput.files ?? []);
+  if (files.length === 0) {
+    setStatus("Select ≥2 images, or one .obj/.ply/.las scan", true);
     return;
   }
 
   uploadBtn.disabled = true;
-  setStatus("Processing scan...");
-
-  const formData = new FormData();
-  formData.append("file", file);
-  formData.append("metadata", metaText);
+  const fd = new FormData();
+  for (const f of files) fd.append("files", f);
+  setStatus("uploading…");
 
   try {
-    const resp = await fetch("/api/v1/visualize", {
-      method: "POST",
-      body: formData,
-    });
-
-    if (!resp.ok) {
-      const err = await resp.json().catch(() => ({ detail: resp.statusText }));
-      throw new Error(err.detail || `HTTP ${resp.status}`);
+    const r = await fetch("/api/v1/twin", { method: "POST", body: fd });
+    if (!r.ok) {
+      const e = await r.json().catch(() => ({ detail: r.statusText }));
+      throw new Error(e.detail || `HTTP ${r.status}`);
     }
+    const { job_id } = (await r.json()) as { job_id: string };
 
-    result = (await resp.json()) as VisualizeResult;
-    setStatus("Scan processed — select a stage below", false);
-
-    // Show stage buttons
-    stageBtns.style.display = "flex";
-
-    // Enable/disable semantic button
-    const semBtn = stageBtns.querySelector('[data-stage="semantic"]') as HTMLButtonElement;
-    if (!result.semantic_glb) {
-      semBtn.style.opacity = "0.3";
-      semBtn.style.pointerEvents = "none";
-    } else {
-      semBtn.style.opacity = "1";
-      semBtn.style.pointerEvents = "auto";
+    // poll until done — the multi-view front is multi-minute + GPU-bound, hence the async job model
+    let s: TwinStatus = { state: "queued", step: "queued" };
+    while (s.state !== "done" && s.state !== "error") {
+      await new Promise((res) => setTimeout(res, 2000));
+      s = (await (await fetch(`/api/v1/twin/${job_id}`)).json()) as TwinStatus;
+      setStatus(`${s.step} — ${s.message ?? ""} (${s.pct ?? 0}%)`);
     }
+    if (s.state === "error") throw new Error(s.error || s.message || "pipeline failed");
 
-    // Enable/disable voxel button
-    const voxBtn = stageBtns.querySelector('[data-stage="voxel"]') as HTMLButtonElement;
-    if (!result.voxel_grid) {
-      voxBtn.style.opacity = "0.3";
-      voxBtn.style.pointerEvents = "none";
-    } else {
-      voxBtn.style.opacity = "1";
-      voxBtn.style.pointerEvents = "auto";
-    }
-
-    // Enable/disable thermal button
-    const thermBtn = stageBtns.querySelector('[data-stage="thermal"]') as HTMLButtonElement;
-    if (!result.thermal) {
-      thermBtn.style.opacity = "0.3";
-      thermBtn.style.pointerEvents = "none";
-    } else {
-      thermBtn.style.opacity = "1";
-      thermBtn.style.pointerEvents = "auto";
-    }
-
-    // Load raw by default
-    setActiveStage("raw");
+    mode = "twin";
+    twinJob = { id: job_id, outputs: s.outputs ?? {} };
+    setStatus("done — showing the voxel twin", false);
+    enableTwinTabs();
+    setActiveStage("voxel");
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    setStatus(`Error: ${msg}`, true);
+    setStatus(`Error: ${err instanceof Error ? err.message : String(err)}`, true);
   } finally {
     uploadBtn.disabled = false;
   }
 });
 
-// ── Demo handler ──────────────────────────────────────────
-demoBtn.addEventListener("click", async () => {
-  demoBtn.disabled = true;
-  setStatus("Generating demo room...");
-
-  try {
-    const resp = await fetch("/api/v1/visualize/demo");
-
-    if (!resp.ok) {
-      const err = await resp.json().catch(() => ({ detail: resp.statusText }));
-      throw new Error(err.detail || `HTTP ${resp.status}`);
-    }
-
-    result = (await resp.json()) as VisualizeResult;
-    setStatus("Demo loaded — select a stage below", false);
-
-    stageBtns.style.display = "flex";
-
-    const semBtn = stageBtns.querySelector('[data-stage="semantic"]') as HTMLButtonElement;
-    if (!result.semantic_glb) {
-      semBtn.style.opacity = "0.3";
-      semBtn.style.pointerEvents = "none";
-    } else {
-      semBtn.style.opacity = "1";
-      semBtn.style.pointerEvents = "auto";
-    }
-
-    const voxBtn = stageBtns.querySelector('[data-stage="voxel"]') as HTMLButtonElement;
-    if (!result.voxel_grid) {
-      voxBtn.style.opacity = "0.3";
-      voxBtn.style.pointerEvents = "none";
-    } else {
-      voxBtn.style.opacity = "1";
-      voxBtn.style.pointerEvents = "auto";
-    }
-
-    const thermBtn = stageBtns.querySelector('[data-stage="thermal"]') as HTMLButtonElement;
-    if (!result.thermal) {
-      thermBtn.style.opacity = "0.3";
-      thermBtn.style.pointerEvents = "none";
-    } else {
-      thermBtn.style.opacity = "1";
-      thermBtn.style.pointerEvents = "auto";
-    }
-
-    const ashraeBtn = stageBtns.querySelector('[data-stage="ashrae"]') as HTMLButtonElement;
-    if (!result.metrics) {
-      ashraeBtn.style.opacity = "0.3";
-      ashraeBtn.style.pointerEvents = "none";
-    } else {
-      ashraeBtn.style.opacity = "1";
-      ashraeBtn.style.pointerEvents = "auto";
-    }
-
-    setActiveStage("raw");
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    setStatus(`Error: ${msg}`, true);
-  } finally {
-    demoBtn.disabled = false;
+// ── Edit handler (transition to the per-instance room editor for the current twin) ──
+editBtn.addEventListener("click", () => {
+  if (!twinJob) {
+    setStatus("Load a twin first, then edit", true);
+    return;
   }
+  // same-origin editor page (served from dist); reads placements.json + posts to /api/v1/twin/{id}/restamp
+  window.location.href = `./editor.html?job=${twinJob.id}`;
 });
+

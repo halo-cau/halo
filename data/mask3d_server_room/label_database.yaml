@@ -1,0 +1,42 @@
+1:
+  color:
+  - 55
+  - 138
+  - 221
+  name: wall
+  validation: true
+2:
+  color:
+  - 180
+  - 178
+  - 169
+  name: floor
+  validation: true
+3:
+  color:
+  - 232
+  - 229
+  - 221
+  name: ceiling
+  validation: true
+4:
+  color:
+  - 29
+  - 158
+  - 117
+  name: server_rack
+  validation: true
+5:
+  color:
+  - 232
+  - 158
+  - 79
+  name: box_clutter
+  validation: true
+6:
+  color:
+  - 36
+  - 169
+  - 225
+  name: ac_unit
+  validation: true

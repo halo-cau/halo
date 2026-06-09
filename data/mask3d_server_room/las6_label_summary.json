@@ -1,0 +1,133 @@
+{
+  "scene": "las6",
+  "source_ply": "/home/ppco915/projects/Capstone/server_room_phone/pipeline_vis_las6/s3_manhattan.ply",
+  "processed_path": "/home/ppco915/projects/Capstone/data/mask3d_server_room/train/las6.npy",
+  "instance_gt_path": "/home/ppco915/projects/Capstone/data/mask3d_server_room/instance_gt/train/las6.txt",
+  "preview_path": "/home/ppco915/projects/Capstone/data/mask3d_server_room/previews/las6_labels_preview.ply",
+  "n_points": 861941,
+  "semantic_counts": {
+    "wall": 218503,
+    "floor": 127172,
+    "ceiling": 215436,
+    "server_rack": 299004,
+    "ignore": 1826
+  },
+  "n_instances": 5,
+  "seed_report": {
+    "shell": {
+      "bounds_min": [
+        -1.8291,
+        -4.5808,
+        -0.1688
+      ],
+      "bounds_max": [
+        2.2673,
+        4.1847,
+        2.3634
+      ],
+      "floor_z": -0.1688,
+      "ceiling_z": 2.3634,
+      "outer_percentile": 0.5,
+      "floor_band_m": 0.28,
+      "ceiling_band_m": 0.28,
+      "wall_band_m": 0.42
+    },
+    "components": [
+      {
+        "id": 0,
+        "cluster_id": 0,
+        "label": "server rack",
+        "n_points": 243082,
+        "center": [
+          0.2191,
+          -1.4117,
+          1.0973
+        ],
+        "bounds_min": [
+          -1.4091,
+          -4.1608,
+          0.1112
+        ],
+        "bounds_max": [
+          1.8473,
+          1.3373,
+          2.0834
+        ],
+        "extent": [
+          3.2564,
+          5.4981,
+          1.9722
+        ]
+      },
+      {
+        "id": 1,
+        "cluster_id": 2,
+        "label": "server rack",
+        "n_points": 55922,
+        "center": [
+          0.2191,
+          2.9869,
+          1.0974
+        ],
+        "bounds_min": [
+          -1.4091,
+          2.2091,
+          0.1113
+        ],
+        "bounds_max": [
+          1.8473,
+          3.7647,
+          2.0834
+        ],
+        "extent": [
+          3.2563,
+          1.5556,
+          1.9721
+        ]
+      },
+      {
+        "id": 2,
+        "cluster_id": 3,
+        "label": "object",
+        "n_points": 578,
+        "center": [
+          -0.6877,
+          1.9727,
+          0.1984
+        ],
+        "bounds_min": [
+          -1.0123,
+          1.8299,
+          0.1984
+        ],
+        "bounds_max": [
+          -0.363,
+          2.1155,
+          0.1984
+        ],
+        "extent": [
+          0.6493,
+          0.2856,
+          0.0
+        ]
+      }
+    ],
+    "label_counts": {
+      "floor": 127172,
+      "server rack": 299004,
+      "wall": 218503,
+      "unknown": 1248,
+      "object": 578,
+      "ceiling": 215436
+    }
+  },
+  "manual_overrides": [],
+  "class_ids": {
+    "wall": 1,
+    "floor": 2,
+    "ceiling": 3,
+    "server_rack": 4,
+    "box_clutter": 5,
+    "ac_unit": 6
+  }
+}

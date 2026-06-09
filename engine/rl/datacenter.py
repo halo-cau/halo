@@ -103,8 +103,17 @@ class DataCenterEnv(gym.Env):
         self.rack_dir[:] = 0
         self.temp[:] = 0
 
-        self.obstacle = self._generate_layout()
-        self.cooling_pos = self._generate_cooling(self.obstacle)
+        # Honor an externally supplied room (the CV-reconstructed, user-edited layout) when given;
+        # otherwise fall back to the synthetic generator (training / no-input behavior unchanged).
+        options = options or {}
+        if options.get("rack_num") is not None:
+            self.rack_num = int(options["rack_num"])
+        obstacle = options.get("obstacle")
+        self.obstacle = (np.asarray(obstacle, dtype=float) if obstacle is not None
+                         else self._generate_layout())
+        cooling = options.get("cooling_pos")
+        self.cooling_pos = (np.asarray(cooling) if cooling is not None
+                            else self._generate_cooling(self.obstacle))
 
         self.step_count = 0
 

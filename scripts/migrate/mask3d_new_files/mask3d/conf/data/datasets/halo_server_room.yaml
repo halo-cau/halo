@@ -1,0 +1,90 @@
+# @package data
+# HALO 6-class server-room dataset (wall/floor/ceiling/server_rack/box_clutter/ac_unit).
+# All three split dataset configs read from data/mask3d_server_room/Validation_database.yaml
+# because the semseg loader hardcodes mode='Validation' before reading the yaml.
+# For an overfit-to-room demo, train and val seeing the same scene is intentional.
+
+train_dataset:
+  _target_: mask3d.datasets.semseg.SemanticSegmentationDataset
+  dataset_name: "halo_server_room"
+  data_dir: /home/ppco915/projects/Capstone/data/mask3d_server_room
+  label_db_filepath: /home/ppco915/projects/Capstone/data/mask3d_server_room/label_database.yaml
+  color_mean_std: /home/ppco915/projects/Capstone/data/mask3d_server_room/color_mean_std.yaml
+  image_augmentations_path: conf/augmentation/albumentations_aug.yaml
+  volume_augmentations_path: conf/augmentation/volumentations_aug.yaml
+  data_percent: 1.0
+  mode: ${data.train_mode}
+  ignore_label: ${data.ignore_label}
+  num_labels: ${data.num_labels}
+  add_raw_coordinates: ${data.add_raw_coordinates}
+  add_colors: ${data.add_colors}
+  add_normals: ${data.add_normals}
+  add_instance: ${data.add_instance}
+  instance_oversampling: 0.0
+  place_around_existing: false
+  point_per_cut: 0
+  max_cut_region: 0
+  flip_in_center: false
+  noise_rate: 0
+  resample_points: 0
+  add_unlabeled_pc: false
+  cropping: ${data.cropping}
+  cropping_args: ${data.cropping_args}
+  is_tta: false
+  crop_min_size: ${data.crop_min_size}
+  crop_length: ${data.crop_length}
+  reps_per_epoch: ${data.reps_per_epoch}
+  # Our labels: 1..6 (six classes) + 255 (ignore).
+  # label_offset=1 maps wall->0, floor->1, ceiling->2, server_rack->3,
+  # box_clutter->4, ac_unit->5 so the model head outputs 6 classes.
+  # No classes filtered out: every non-ignore class is a learning target.
+  filter_out_classes: []
+  label_offset: 1
+
+validation_dataset:
+  _target_: mask3d.datasets.semseg.SemanticSegmentationDataset
+  dataset_name: "halo_server_room"
+  data_dir: /home/ppco915/projects/Capstone/data/mask3d_server_room
+  label_db_filepath: /home/ppco915/projects/Capstone/data/mask3d_server_room/label_database.yaml
+  color_mean_std: /home/ppco915/projects/Capstone/data/mask3d_server_room/color_mean_std.yaml
+  image_augmentations_path: null
+  volume_augmentations_path: null
+  data_percent: 1.0
+  mode: ${data.validation_mode}
+  ignore_label: ${data.ignore_label}
+  num_labels: ${data.num_labels}
+  add_raw_coordinates: ${data.add_raw_coordinates}
+  add_colors: ${data.add_colors}
+  add_normals: ${data.add_normals}
+  add_instance: ${data.add_instance}
+  cropping: false
+  is_tta: false
+  crop_min_size: ${data.crop_min_size}
+  crop_length: ${data.crop_length}
+  reps_per_epoch: ${data.reps_per_epoch}
+  filter_out_classes: []
+  label_offset: 1
+
+test_dataset:
+  _target_: mask3d.datasets.semseg.SemanticSegmentationDataset
+  dataset_name: "halo_server_room"
+  data_dir: /home/ppco915/projects/Capstone/data/mask3d_server_room
+  label_db_filepath: /home/ppco915/projects/Capstone/data/mask3d_server_room/label_database.yaml
+  color_mean_std: /home/ppco915/projects/Capstone/data/mask3d_server_room/color_mean_std.yaml
+  image_augmentations_path: null
+  volume_augmentations_path: null
+  data_percent: 1.0
+  mode: ${data.test_mode}
+  ignore_label: ${data.ignore_label}
+  num_labels: ${data.num_labels}
+  add_raw_coordinates: ${data.add_raw_coordinates}
+  add_colors: ${data.add_colors}
+  add_normals: ${data.add_normals}
+  add_instance: ${data.add_instance}
+  cropping: false
+  is_tta: false
+  crop_min_size: ${data.crop_min_size}
+  crop_length: ${data.crop_length}
+  reps_per_epoch: ${data.reps_per_epoch}
+  filter_out_classes: []
+  label_offset: 1

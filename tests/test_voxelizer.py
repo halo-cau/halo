@@ -17,10 +17,10 @@ from engine.core.exceptions import MeshProcessingError, RoomTooLargeError
 from engine.vision.cleaner import clean_and_align
 from engine.vision.voxelizer import (
     _morphological_close,
+    _stamp_metadata_labels,
     _surface_voxelize,
     _world_to_index,
-    fuse_semantics,
-    voxelize_and_label,
+    voxelize_and_stamp_metadata,
 )
 
 
@@ -87,15 +87,15 @@ class TestWorldToIndex:
         assert (ix, iy, iz) == (5, 5, 5)
 
 
-class TestFuseSemantics:
-    """Tests for semantic label injection (Step 4)."""
+class TestStampMetadataLabels:
+    """Tests for voxel labeling from user metadata (post-voxelization stamping)."""
 
     def test_ac_vent_stamped(self) -> None:
         grid = np.zeros((20, 20, 20), dtype=np.int8)
         origin = np.array([0.0, 0.0, 0.0])
         meta = ScanMetadata(cooling_units=[CoolingUnit(Coordinate(0.5, 0.5, 0.5))])
 
-        result = fuse_semantics(grid, meta, origin)
+        result = _stamp_metadata_labels(grid, meta, origin)
         assert result[5, 5, 5] == COOLING_AC_VENT
 
     def test_human_workspace_stamped(self) -> None:
@@ -103,7 +103,7 @@ class TestFuseSemantics:
         origin = np.array([0.0, 0.0, 0.0])
         meta = ScanMetadata(human_workspaces=[Coordinate(1.0, 1.0, 0.0)])
 
-        result = fuse_semantics(grid, meta, origin)
+        result = _stamp_metadata_labels(grid, meta, origin)
         assert result[10, 10, 0] == HUMAN_WORKSPACE
 
     def test_heat_injection_spreads(self) -> None:
@@ -111,7 +111,7 @@ class TestFuseSemantics:
         origin = np.array([0.0, 0.0, 0.0])
         meta = ScanMetadata(legacy_servers=[Coordinate(1.5, 1.5, 1.5)])
 
-        result = fuse_semantics(grid, meta, origin)
+        result = _stamp_metadata_labels(grid, meta, origin)
         heat_count = (result == HEAT_LEGACY_SERVER).sum()
         # Gaussian should spread to more than a single voxel
         assert heat_count > 1
@@ -122,13 +122,13 @@ class TestFuseSemantics:
         origin = np.array([0.0, 0.0, 0.0])
         meta = ScanMetadata(cooling_units=[CoolingUnit(Coordinate(99.0, 99.0, 99.0))])
 
-        result = fuse_semantics(grid, meta, origin)
+        result = _stamp_metadata_labels(grid, meta, origin)
         # Grid should be unchanged
         assert (result == SPACE_EMPTY).all()
 
 
-class TestVoxelizeAndLabel:
-    """Integration test for the full Steps 2-4."""
+class TestVoxelizeAndStampMetadata:
+    """Integration test for voxelization + closing + metadata stamping."""
 
     def test_end_to_end(self, sample_obj_path: Path) -> None:
         """Full voxelization pipeline should produce a labeled int8 grid."""
@@ -139,7 +139,7 @@ class TestVoxelizeAndLabel:
                 legacy_servers=[Coordinate(1.5, 1.0, 0.5)],
                 human_workspaces=[Coordinate(2.0, 1.5, 0.1)],
             )
-            grid, origin = voxelize_and_label(ply_path, meta)
+            grid, layout_grid, origin = voxelize_and_stamp_metadata(ply_path, meta)
 
             assert grid.dtype == np.int8
             assert grid.ndim == 3
@@ -148,6 +148,20 @@ class TestVoxelizeAndLabel:
             # Must contain at least empty and wall
             assert SPACE_EMPTY in unique
             assert OBSTACLE_WALL in unique
+
+            # Layout grid: same shape/dtype as grid, only {empty, wall}
+            assert layout_grid.shape == grid.shape
+            assert layout_grid.dtype == grid.dtype
+            layout_unique = set(np.unique(layout_grid))
+            assert layout_unique <= {SPACE_EMPTY, OBSTACLE_WALL}
+            # All 6 outer faces must be walls; interior must be empty.
+            assert (layout_grid[ 0, :, :] == OBSTACLE_WALL).all()
+            assert (layout_grid[-1, :, :] == OBSTACLE_WALL).all()
+            assert (layout_grid[:,  0, :] == OBSTACLE_WALL).all()
+            assert (layout_grid[:, -1, :] == OBSTACLE_WALL).all()
+            assert (layout_grid[:, :,  0] == OBSTACLE_WALL).all()
+            assert (layout_grid[:, :, -1] == OBSTACLE_WALL).all()
+            assert (layout_grid[1:-1, 1:-1, 1:-1] == SPACE_EMPTY).all()
         finally:
             ply_path.unlink(missing_ok=True)
 
@@ -162,7 +176,7 @@ class TestVoxelizeAndLabel:
             ply_path = clean_and_align(oversized_obj_path)
             meta = ScanMetadata()
             with pytest.raises((RoomTooLargeError, MeshProcessingError)):
-                voxelize_and_label(ply_path, meta)
+                voxelize_and_stamp_metadata(ply_path, meta)
         except MeshProcessingError:
             pass  # RANSAC failure on sparse geometry — also acceptable
         finally:
