@@ -37,14 +37,16 @@ def _align_floor_to_z0(
     normal = np.array([a, b, c], dtype=np.float64)
     normal /= np.linalg.norm(normal)
 
-    # Ensure the normal points toward the inferred room-up axis before mapping
-    # it to +Z.  Phone scans are not guaranteed to use raw Z as vertical; for
-    # this scan raw Z is the entrance/depth direction, so choosing the most
-    # raw-Z-like plane incorrectly turns a wall into the floor.
-    if up_axis is not None and normal[up_axis] < 0:
-        normal = -normal
-        d = -d
-    elif up_axis is None and normal[2] < 0:
+    # Orient the floor normal toward the room interior so the room ends up
+    # ABOVE z=0 after alignment.  Geometry carries no gravity, so "up" is the
+    # side of the floor plane that the bulk of the scan occupies.  The previous
+    # bbox-axis sign heuristic could point the normal the wrong way and put the
+    # room below z=0, which flips the height-based floor/ceiling prior upside
+    # down (ceiling labeled floor and vice versa).  The median vertex is a
+    # robust interior reference: if it sits on the negative side of the plane,
+    # flip the normal so it points into the room.
+    center = np.median(np.asarray(mesh.vertices, dtype=np.float64), axis=0)
+    if float(center @ normal + d) < 0.0:
         normal = -normal
         d = -d
 

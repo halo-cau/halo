@@ -3,12 +3,15 @@
 Renders genuine 3D perspective views (not 2D cross-sections) using
 matplotlib's 3D scatter/surface API, so no display or GPU is required.
 
-Each stage is saved as a PNG in server_room_phone/pipeline_vis/.
+Each stage is saved as a PNG in the chosen output directory.
 
 Usage:
-    conda run -n halo python scripts/visualize_pipeline.py
+    conda run -n halo python scripts/visualize_pipeline.py \\
+        --scan server_room_phone/server_room_6.las \\
+        --out-dir server_room_phone/pipeline_vis_demo
 """
 
+import argparse
 import os
 import sys
 import tempfile
@@ -37,12 +40,25 @@ from engine.core.config import (
     SOR_STD_RATIO,
     VOXEL_SIZE,
 )
-from engine.vision.cleaner import _align_floor_to_z0
+from engine.vision.cleaner import _align_floor_to_z0, _find_floor_plane, _load_scan_as_vertex_mesh
 
 # ── Config ────────────────────────────────────────────────────────────────────
-OBJ_PATH  = Path(__file__).resolve().parents[1] / "server_room_phone" / "textured_output.obj"
-OUT_DIR   = OBJ_PATH.parent / "pipeline_vis"
-OUT_DIR.mkdir(exist_ok=True)
+_PROJECT_ROOT = Path(__file__).resolve().parents[1]
+_DEFAULT_SCAN = _PROJECT_ROOT / "server_room_phone" / "textured_output.obj"
+
+_argparser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+_argparser.add_argument("--scan", type=Path, default=_DEFAULT_SCAN,
+                        help="Path to a mesh scan (.obj/.ply with triangles). Default: textured_output.obj. "
+                             "Note: LAS/LAZ point clouds lack faces and break the surface-voxelization stage.")
+_argparser.add_argument("--out-dir", type=Path, default=None,
+                        help="Directory for PNG artifacts. Default: <scan parent>/pipeline_vis.")
+_args, _ = _argparser.parse_known_args()
+
+OBJ_PATH = _args.scan.expanduser().resolve()
+if not OBJ_PATH.exists():
+    raise SystemExit(f"Scan not found: {OBJ_PATH}")
+OUT_DIR = (_args.out_dir if _args.out_dir is not None else OBJ_PATH.parent / "pipeline_vis").expanduser().resolve()
+OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 MAX_PTS   = 25_000   # downsample cap for scatter plots (keeps renders fast)
 ELEV, AZIM = 25, -55  # default 3D camera
@@ -89,27 +105,37 @@ def _save(fig, name):
 
 
 def _plane_mesh(plane_model, pts, margin=0.3):
-    """Return (XX, YY, ZZ) arrays for the detected RANSAC plane over the data extent."""
+    """Return (XX, YY, ZZ) arrays for the detected RANSAC plane.
+
+    Parameterizes the two axes orthogonal to the plane normal's dominant
+    component and solves for the third, so a plane whose normal is ±X or
+    ±Y renders correctly (not flattened to a Z=0 sheet).
+    """
     a, b, c, d = plane_model
-    verts = pts
-    xmin, xmax = verts[:, 0].min() - margin, verts[:, 0].max() + margin
-    ymin, ymax = verts[:, 1].min() - margin, verts[:, 1].max() + margin
-    XX, YY = np.meshgrid(
-        np.linspace(xmin, xmax, 30),
-        np.linspace(ymin, ymax, 30),
-    )
-    if abs(c) > 1e-6:
-        ZZ = -(a * XX + b * YY + d) / c
-    else:
-        ZZ = np.zeros_like(XX)
-    return XX, YY, ZZ
+    coeffs = np.array([a, b, c], dtype=np.float64)
+    dom = int(np.argmax(np.abs(coeffs)))
+    # parameter axes (the two non-dominant coords)
+    p1, p2 = [i for i in range(3) if i != dom]
+    lo1, hi1 = pts[:, p1].min() - margin, pts[:, p1].max() + margin
+    lo2, hi2 = pts[:, p2].min() - margin, pts[:, p2].max() + margin
+    G1, G2 = np.meshgrid(np.linspace(lo1, hi1, 30), np.linspace(lo2, hi2, 30))
+    # ax + by + cz + d = 0  →  dom = -(other_terms + d) / coeffs[dom]
+    G_dom = -(coeffs[p1] * G1 + coeffs[p2] * G2 + d) / coeffs[dom]
+    out = [None, None, None]
+    out[p1] = G1
+    out[p2] = G2
+    out[dom] = G_dom
+    return out[0], out[1], out[2]
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Load raw mesh
 # ══════════════════════════════════════════════════════════════════════════════
-print("Loading mesh …")
-mesh = o3d.io.read_triangle_mesh(str(OBJ_PATH))
+print(f"Loading mesh from {OBJ_PATH.name} …")
+# Use the cleaner's universal loader so LAS/LAZ point-cloud inputs are
+# converted to vertex-only TriangleMesh containers consistently with the
+# production pipeline.
+mesh = _load_scan_as_vertex_mesh(OBJ_PATH)
 mesh.compute_vertex_normals()
 
 raw_verts   = np.asarray(mesh.vertices)
@@ -171,52 +197,32 @@ for col, (elev, azim, lbl) in enumerate([(20, -60, "Isometric"), (90, -90, "Top-
 fig.tight_layout()
 _save(fig, "s1_sor_cleaning.png")
 
-# Build cleaned mesh for next stages
+# Build cleaned mesh for next stages.  Snapshot vertices/normals as copies so
+# they aren't silently rotated when `_align_floor_to_z0` mutates `mesh_sor`
+# in place (numpy views into Open3D buffers would otherwise track the rotation
+# and the "before alignment" panel would render post-alignment coords).
 mesh_sor = mesh.select_by_index(inlier_idx)
 mesh_sor.compute_vertex_normals()
-sor_verts   = np.asarray(mesh_sor.vertices)
-sor_normals = np.asarray(mesh_sor.vertex_normals)
+sor_verts   = np.array(mesh_sor.vertices)
+sor_normals = np.array(mesh_sor.vertex_normals)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Stage 2a — RANSAC plane detection: show all attempts + best plane
+# Stage 2a — RANSAC plane detection: defer to the production cleaner so the
+# visualization shows the plane the live pipeline actually picks.
 # ══════════════════════════════════════════════════════════════════════════════
 print("Stage 2 — RANSAC floor detection …")
 
-pcd_clean = o3d.geometry.PointCloud()
-pcd_clean.points  = mesh_sor.vertices
-pcd_clean.normals = mesh_sor.vertex_normals
-
-best_plane   = None
-best_z_comp  = 0.0
-remaining    = pcd_clean
-all_planes   = []
-
-for _ in range(5):
-    if len(remaining.points) < RANSAC_NUM_POINTS:
-        break
-    plane_model, inlier_idx_r = remaining.segment_plane(
-        distance_threshold=RANSAC_DISTANCE_THRESHOLD,
-        ransac_n=RANSAC_NUM_POINTS,
-        num_iterations=RANSAC_NUM_ITERATIONS,
-    )
-    n = np.array(plane_model[:3]); n /= np.linalg.norm(n)
-    z_comp = abs(n[2])
-    all_planes.append((plane_model, z_comp, len(inlier_idx_r)))
-    if z_comp > best_z_comp:
-        best_z_comp = z_comp
-        best_plane  = np.asarray(plane_model)
-    if z_comp > 0.9:
-        break
-    remaining = remaining.select_by_index(inlier_idx_r, invert=True)
-
+best_plane, up_axis = _find_floor_plane(mesh_sor)
 a, b, c, d = best_plane
-print(f"  Best plane normal |n_z| = {best_z_comp:.4f}")
+axis_name = "XYZ"[up_axis]
+n_up = abs(np.asarray(best_plane[:3]) / np.linalg.norm(best_plane[:3]))[up_axis]
+print(f"  Inferred up-axis: {axis_name}   |n_{axis_name.lower()}|={n_up:.4f}")
 
 # Render: point cloud + detected floor plane + plane normal annotation
 fig = plt.figure(figsize=(10, 8))
 fig.suptitle(
     f"Stage 2a — RANSAC floor detection\n"
-    f"Best plane normal: ({a:.3f}, {b:.3f}, {c:.3f})  |n_z|={best_z_comp:.3f}",
+    f"Best plane normal: ({a:.3f}, {b:.3f}, {c:.3f})  inferred up-axis: {axis_name}  |n_{axis_name.lower()}|={n_up:.3f}",
     fontsize=10,
 )
 ax = fig.add_subplot(1, 1, 1, projection="3d")
@@ -228,12 +234,12 @@ XX, YY, ZZ = _plane_mesh(best_plane, sor_verts)
 ax.plot_surface(XX, YY, ZZ, alpha=0.35, color="red", linewidth=0,
                 antialiased=False, label="Detected plane")
 
-# Draw plane normal arrow from centroid
+# Draw plane normal arrow from centroid; orient it toward the inferred up axis.
 centroid = sor_verts.mean(axis=0)
 normal_v = np.array([a, b, c]) / np.linalg.norm([a, b, c])
-if normal_v[2] < 0:
+if normal_v[up_axis] < 0:
     normal_v = -normal_v
-arrow_len = float(np.ptp(sor_verts[:, 2]) * 0.3)
+arrow_len = float(np.ptp(sor_verts[:, up_axis]) * 0.3)
 ax.quiver(*centroid, *(normal_v * arrow_len), color="orange", linewidth=2,
           arrow_length_ratio=0.15)
 
@@ -247,7 +253,7 @@ _save(fig, "s2a_ransac_plane.png")
 # ── Stage 2b: before vs after alignment side-by-side ─────────────────────────
 print("  Floor alignment …")
 
-mesh_aligned = _align_floor_to_z0(mesh_sor, best_plane)
+mesh_aligned = _align_floor_to_z0(mesh_sor, best_plane, up_axis=up_axis)
 aligned_verts   = np.asarray(mesh_aligned.vertices)
 aligned_normals = np.asarray(mesh_aligned.vertex_normals)
 rgb_aligned = _normals_to_rgb(aligned_normals)

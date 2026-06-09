@@ -60,6 +60,7 @@ opt/
 
 # CV: raw phone scans, LiDAR captures, and pipeline visualization meshes.
 # These are large per-room blobs (LAS, OBJ, PLY) regenerated per scan session.
+# NOTE: never `git add -f` here — a force-add of this dir once bloated .git to 2 GB.
 server_room_phone/
 
 # CV: native deb packages occasionally dropped here for CUDA installs.

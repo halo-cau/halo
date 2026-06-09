@@ -43,7 +43,6 @@ from engine.vision.segmentor_base import (
 from engine.vision.graph_fusion import GraphCleanupConfig, apply_graph_cleanup
 from engine.vision.structural_priors import (
     StructuralProtectionConfig,
-    append_virtual_room_shell,
     apply_structural_protection,
     flatten_structural_labels_to_room_shell,
 )
@@ -267,10 +266,11 @@ class Mask3DSegmentor(BaseSegmentor):
             n_removed, n_total, 100.0 * n_removed / max(1, n_total),
         )
 
-        structural_mesh, virtual_shell_stats = append_virtual_room_shell(
-            strip_non_structural(flattened_mesh, vertex_labels),
-            protection.prior,
-        )
+        # The virtual room-shell cuboid is appended centrally in
+        # ``engine.vision.pipeline.run_pipeline`` so every backend (and the
+        # no-segmentor fallback) gets a closed envelope. Just return the
+        # stripped, flattened mesh here.
+        structural_mesh = strip_non_structural(flattened_mesh, vertex_labels)
 
         return SegmentorResult(
             structural_mesh=structural_mesh,
@@ -283,7 +283,6 @@ class Mask3DSegmentor(BaseSegmentor):
                 "structural_protection": protection.to_json(),
                 "graph_cleanup": graph_cleanup.to_json(),
                 "structural_flattening": flatten_stats,
-                "virtual_room_shell": virtual_shell_stats,
             },
         )
 

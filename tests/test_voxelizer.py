@@ -139,7 +139,7 @@ class TestVoxelizeAndStampMetadata:
                 legacy_servers=[Coordinate(1.5, 1.0, 0.5)],
                 human_workspaces=[Coordinate(2.0, 1.5, 0.1)],
             )
-            grid, origin = voxelize_and_stamp_metadata(ply_path, meta)
+            grid, layout_grid, origin = voxelize_and_stamp_metadata(ply_path, meta)
 
             assert grid.dtype == np.int8
             assert grid.ndim == 3
@@ -148,6 +148,20 @@ class TestVoxelizeAndStampMetadata:
             # Must contain at least empty and wall
             assert SPACE_EMPTY in unique
             assert OBSTACLE_WALL in unique
+
+            # Layout grid: same shape/dtype as grid, only {empty, wall}
+            assert layout_grid.shape == grid.shape
+            assert layout_grid.dtype == grid.dtype
+            layout_unique = set(np.unique(layout_grid))
+            assert layout_unique <= {SPACE_EMPTY, OBSTACLE_WALL}
+            # All 6 outer faces must be walls; interior must be empty.
+            assert (layout_grid[ 0, :, :] == OBSTACLE_WALL).all()
+            assert (layout_grid[-1, :, :] == OBSTACLE_WALL).all()
+            assert (layout_grid[:,  0, :] == OBSTACLE_WALL).all()
+            assert (layout_grid[:, -1, :] == OBSTACLE_WALL).all()
+            assert (layout_grid[:, :,  0] == OBSTACLE_WALL).all()
+            assert (layout_grid[:, :, -1] == OBSTACLE_WALL).all()
+            assert (layout_grid[1:-1, 1:-1, 1:-1] == SPACE_EMPTY).all()
         finally:
             ply_path.unlink(missing_ok=True)
 

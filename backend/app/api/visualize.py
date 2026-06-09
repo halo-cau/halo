@@ -29,7 +29,7 @@ from engine.thermal.metrics import compute_metrics
 from engine.thermal.solver import compute_thermal_field
 from engine.vision.cleaner import clean_and_align_meshes
 from engine.vision.exporter import o3d_to_glb, paint_semantic_colors
-from engine.vision.voxelizer import voxelize_and_label
+from engine.vision.voxelizer import voxelize_and_stamp_metadata
 
 router = APIRouter()
 
@@ -106,35 +106,35 @@ def _build_equipment_list(metadata: ScanMetadata) -> list[EquipmentItem]:
     return items
 
 
-def _voxelize_mesh(
-    cleaned_mesh: o3d.geometry.TriangleMesh, metadata: ScanMetadata,
-) -> tuple[VoxelData, np.ndarray, np.ndarray]:
-    """Save a cleaned Open3D mesh to a temp PLY, voxelize, and return compact data.
-
-    Returns (VoxelData, grid, origin) — the raw grid/origin are needed for the
-    thermal solver.
-    """
-    with tempfile.NamedTemporaryFile(suffix=".ply", delete=False) as tmp:
-        ply_path = tmp.name
-    try:
-        o3d.io.write_triangle_mesh(ply_path, cleaned_mesh)
-        grid, origin = voxelize_and_label(ply_path, metadata)
-    finally:
-        if os.path.exists(ply_path):
-            os.unlink(ply_path)
-
-    # Extract non-empty voxels as compact parallel arrays
-    nz = np.argwhere(grid != 0)  # [[ix, iy, iz], ...]
+def _grid_to_voxel_data(grid: np.ndarray, origin: np.ndarray) -> VoxelData:
+    """Pack a dense int8 grid into the compact non-empty-voxel payload."""
+    nz = np.argwhere(grid != 0)
     labels = grid[nz[:, 0], nz[:, 1], nz[:, 2]].tolist() if len(nz) > 0 else []
-
-    voxel_data = VoxelData(
+    return VoxelData(
         shape=list(grid.shape),
         voxel_size=VOXEL_SIZE,
         origin=origin.tolist(),
         positions=nz.tolist(),
         labels=labels,
     )
-    return voxel_data, grid, origin
+
+
+def _voxelize_mesh(
+    cleaned_mesh: o3d.geometry.TriangleMesh, metadata: ScanMetadata,
+) -> tuple[VoxelData, VoxelData, np.ndarray, np.ndarray]:
+    """Voxelize a cleaned Open3D mesh and return compact data.
+
+    Returns ``(voxel_data, layout_voxel_data, grid, origin)`` — the raw grid
+    and origin feed the thermal solver; ``layout_voxel_data`` is the
+    shell-only cuboid for the layout viewer.
+    """
+    grid, layout_grid, origin = voxelize_and_stamp_metadata(cleaned_mesh, metadata)
+    return (
+        _grid_to_voxel_data(grid, origin),
+        _grid_to_voxel_data(layout_grid, origin),
+        grid,
+        origin,
+    )
 
 
 def _compute_thermal(
@@ -226,7 +226,7 @@ async def visualize(
         ) from exc
     engine_metadata = parsed.to_engine()
 
-    # --- Save temp .obj ---
+    # --- Save temp scan file ---
     TEMP_SCAN_DIR.mkdir(parents=True, exist_ok=True)
     ext = Path(filename).suffix.lower()
     scan_path = TEMP_SCAN_DIR / f"{uuid.uuid4()}{ext}"
@@ -260,16 +260,25 @@ async def visualize(
         semantic_glb = base64.b64encode(o3d_to_glb(colored_mesh)).decode("ascii")
 
     # --- Voxel grid + thermal ---
-    voxel_grid, grid, origin = _voxelize_mesh(cleaned_mesh, engine_metadata)
-    thermal, metrics = _compute_thermal(
-        grid, engine_metadata.racks, origin, engine_metadata.cooling_units,
-    )
+    try:
+        voxel_grid, layout_voxel_grid, grid, origin = _voxelize_mesh(
+            cleaned_mesh, engine_metadata,
+        )
+        thermal, metrics = _compute_thermal(
+            grid, engine_metadata.racks, origin, engine_metadata.cooling_units,
+        )
+    except EngineError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
 
     return VisualizeResponse(
         raw_glb=raw_glb,
         cleaned_glb=cleaned_glb,
         semantic_glb=semantic_glb,
         voxel_grid=voxel_grid,
+        layout_voxel_grid=layout_voxel_grid,
         thermal=thermal,
         metrics=metrics,
         equipment=_build_equipment_list(engine_metadata) or None,
@@ -285,7 +294,7 @@ async def visualize_demo() -> VisualizeResponse:
     mesh.compute_vertex_normals()
     mesh = mesh.subdivide_midpoint(number_of_iterations=3)
 
-    # Write to temp .obj so cleaner can process it
+    # Write to temp OBJ so cleaner can process the generated demo mesh.
     with tempfile.NamedTemporaryFile(suffix=".obj", delete=False) as tmp:
         obj_path = tmp.name
     try:
@@ -359,7 +368,9 @@ async def visualize_demo() -> VisualizeResponse:
     semantic_glb = base64.b64encode(o3d_to_glb(colored_mesh)).decode("ascii")
 
     # --- Voxel grid + thermal ---
-    voxel_grid, grid, origin = _voxelize_mesh(cleaned_mesh, demo_metadata)
+    voxel_grid, layout_voxel_grid, grid, origin = _voxelize_mesh(
+        cleaned_mesh, demo_metadata,
+    )
     thermal, metrics = _compute_thermal(
         grid, demo_metadata.racks, origin, demo_metadata.cooling_units,
     )
@@ -369,6 +380,7 @@ async def visualize_demo() -> VisualizeResponse:
         cleaned_glb=cleaned_glb,
         semantic_glb=semantic_glb,
         voxel_grid=voxel_grid,
+        layout_voxel_grid=layout_voxel_grid,
         thermal=thermal,
         metrics=metrics,
         equipment=_build_equipment_list(demo_metadata) or None,

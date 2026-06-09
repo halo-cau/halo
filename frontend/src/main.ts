@@ -14,6 +14,14 @@ import {
   type SceneGraph,
 } from "./data/sceneGraphs";
 
+const SUPPORTED_SCAN_EXTENSIONS = [".obj", ".ply", ".las", ".laz"];
+const SUPPORTED_SCAN_EXTENSIONS_TEXT = ".obj, .ply, .las";
+
+function isSupportedScanFile(file: File): boolean {
+  const name = file.name.toLowerCase();
+  return SUPPORTED_SCAN_EXTENSIONS.some((ext) => name.endsWith(ext));
+}
+
 // ===== State =====
 let currentSceneIndex = 0;
 let scene: THREE.Scene;
@@ -105,6 +113,8 @@ function init() {
   updateUI(allScenes[currentSceneIndex]);
   setupButtons();
   window.addEventListener("resize", onResize);
+  onResize();
+  requestAnimationFrame(onResize);
   animate();
 }
 
@@ -436,7 +446,7 @@ function switchToScene(idx: number) {
     const descEl = document.getElementById("scene-desc");
     if (descEl) {
       descEl.textContent =
-        "Upload a .obj scan or load the demo room to analyze thermal performance.";
+        "Upload a scan file or load the demo room to analyze thermal performance.";
     }
   } else {
     // Standard scene mode
@@ -606,10 +616,17 @@ function tempToColorScan(t: number, _minT: number, _maxT: number): THREE.Color {
 
 function buildVoxelScene(resp: VisualizeResponse) {
   scanVoxelGroup.clear();
+  if (!scanVoxelGroup.parent) {
+    scene.add(scanVoxelGroup);
+  }
+  scanVoxelGroup.visible = true;
   scanMetricsCache = resp.metrics;
 
   const voxel = resp.voxel_grid;
-  if (!voxel || voxel.positions.length === 0) return;
+  if (!voxel || voxel.positions.length === 0) {
+    setScanStatus("No voxel scene was returned by the visualization API.", true);
+    return;
+  }
 
   const vs = voxel.voxel_size;
   const ox = voxel.origin[0];
@@ -873,9 +890,11 @@ function buildVoxelScene(resp: VisualizeResponse) {
   const cy = oz + rh / 2;
   const cz = oy + rd / 2;
   const maxDim = Math.max(rw, rd, rh);
-  camera.position.set(cx + maxDim, cy + maxDim * 0.8, cz + maxDim);
+  const frameDim = Math.max(maxDim, 1);
+  camera.position.set(cx + frameDim, cy + frameDim * 0.8, cz + frameDim);
   controls.target.set(cx, cy, cz);
   controls.update();
+  onResize();
 
   // Update Z slider range
   const zSlider = document.getElementById("voxel-z-slider") as HTMLInputElement;
@@ -1568,13 +1587,13 @@ async function uploadScan() {
   const uploadBtn = document.getElementById("scan-upload-btn") as HTMLButtonElement;
 
   if (!fileInput.files?.length) {
-    setScanStatus("Please select a .obj file.", true);
+    setScanStatus(`Please select a scan file (${SUPPORTED_SCAN_EXTENSIONS_TEXT}).`, true);
     return;
   }
 
   const file = fileInput.files[0];
-  if (!file.name.toLowerCase().endsWith(".obj")) {
-    setScanStatus("Only .obj files are supported.", true);
+  if (!isSupportedScanFile(file)) {
+    setScanStatus(`Only ${SUPPORTED_SCAN_EXTENSIONS_TEXT} files are supported.`, true);
     return;
   }
 

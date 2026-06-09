@@ -9,15 +9,21 @@ vertices that geometrically look like floor/wall/ceiling.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal
 
 import numpy as np
 import open3d as o3d
+from scipy.ndimage import label as ndi_label
 
 from engine.vision.segmentor_base import AMBIGUOUS_LABELS, STATIC_INFRASTRUCTURE_LABELS, STRUCTURAL_LABELS
 
 ProtectionLevel = Literal["off", "light", "balanced", "strong", "shell"]
+
+# Domain prior for typical server-room slab heights (ceiling to floor).
+DEFAULT_ROOM_HEIGHT_M: float = 2.7
+# If ceiling- and floor-derived heights disagree by more than this, flag it.
+HEIGHT_DISAGREEMENT_FLAG_M: float = 0.30
 
 
 @dataclass(frozen=True)
@@ -71,13 +77,14 @@ class RoomShellPrior:
     distance_to_shell: np.ndarray
     confidence: np.ndarray
     config: StructuralProtectionConfig
+    extra: dict = field(default_factory=dict)
 
     @property
     def n_protected(self) -> int:
         return int(self.protected_mask.sum())
 
     def to_json(self) -> dict:
-        return {
+        data = {
             "level": self.config.level,
             "outer_percentile": self.config.outer_percentile,
             "plane_tolerance_m": self.config.plane_tolerance_m,
@@ -87,6 +94,9 @@ class RoomShellPrior:
             "bounds_max": np.round(self.bounds_max, 4).tolist(),
             "n_protected": self.n_protected,
         }
+        if self.extra:
+            data["extra"] = self.extra
+        return data
 
 
 @dataclass
@@ -103,6 +113,156 @@ class ProtectedLabelResult:
         return data
 
 
+def _detect_ceiling_vertices_geometric(
+    verts: np.ndarray,
+    normals: np.ndarray,
+    top_z_percentile: float = 80.0,
+    normal_z_min: float = 0.85,
+) -> np.ndarray:
+    """Return a bool mask over vertices that geometrically look like ceiling.
+
+    Two conditions: vertex z is in the upper ``top_z_percentile`` of the cloud
+    AND the vertex normal is close to vertical (|n_z| above ``normal_z_min``).
+    Normal sign is ignored because Open3D's vertex-normal orientation isn't
+    globally consistent on point clouds.
+    """
+    if len(verts) == 0:
+        return np.zeros(0, dtype=bool)
+    z_thresh = float(np.percentile(verts[:, 2], top_z_percentile))
+    in_top = verts[:, 2] >= z_thresh
+    if len(normals) == len(verts):
+        horizontal = np.abs(normals[:, 2]) >= normal_z_min
+    else:
+        horizontal = np.ones(len(verts), dtype=bool)
+    return in_top & horizontal
+
+
+def _largest_xy_component(
+    verts_xy: np.ndarray,
+    voxel_size_m: float = 0.10,
+) -> tuple[np.ndarray, dict]:
+    """Return the indices of vertices that belong to the largest connected
+    component when their XY positions are rasterised to a 2D grid.
+
+    Drops thin stubs (aisle extending past a doorway) when the connecting
+    cells are sparser than the room ceiling.
+    """
+    if len(verts_xy) == 0:
+        return np.zeros(0, dtype=np.int64), {"n_components": 0}
+    x = verts_xy[:, 0]
+    y = verts_xy[:, 1]
+    x0, x1 = float(x.min()), float(x.max())
+    y0, y1 = float(y.min()), float(y.max())
+    nx = max(1, int(np.ceil((x1 - x0) / voxel_size_m)) + 1)
+    ny = max(1, int(np.ceil((y1 - y0) / voxel_size_m)) + 1)
+    ix = np.clip(np.floor((x - x0) / voxel_size_m).astype(np.int64), 0, nx - 1)
+    iy = np.clip(np.floor((y - y0) / voxel_size_m).astype(np.int64), 0, ny - 1)
+    occupied = np.zeros((nx, ny), dtype=bool)
+    occupied[ix, iy] = True
+    structure = np.ones((3, 3), dtype=bool)
+    labeled, n_components = ndi_label(occupied, structure=structure)
+    if n_components == 0:
+        return np.zeros(0, dtype=np.int64), {"n_components": 0}
+    sizes = np.bincount(labeled.ravel())
+    sizes[0] = 0
+    largest = int(np.argmax(sizes))
+    cell_label = labeled[ix, iy]
+    keep_idx = np.where(cell_label == largest)[0]
+    return keep_idx, {
+        "n_components": int(n_components),
+        "largest_component_cells": int(sizes[largest]),
+        "voxel_size_m": float(voxel_size_m),
+    }
+
+
+def _estimate_bounds_from_ceiling(
+    verts: np.ndarray,
+    normals: np.ndarray,
+    *,
+    top_z_percentile: float = 80.0,
+    normal_z_min: float = 0.85,
+    rect_inset_percentile: float = 2.0,
+    floor_band_m: float = 0.25,
+    min_ceiling_vertices: int = 1000,
+) -> tuple[np.ndarray, np.ndarray, dict] | None:
+    """Derive cuboid bounds from a ceiling-projection rectangle.
+
+    Returns ``(bounds_min, bounds_max, meta)`` or ``None`` if ceiling
+    detection didn't find enough support to be trusted.
+    """
+    if len(verts) == 0:
+        return None
+    ceiling_mask = _detect_ceiling_vertices_geometric(
+        verts, normals,
+        top_z_percentile=top_z_percentile,
+        normal_z_min=normal_z_min,
+    )
+    n_ceiling_raw = int(ceiling_mask.sum())
+    if n_ceiling_raw < min_ceiling_vertices:
+        return None
+
+    ceiling_verts = verts[ceiling_mask]
+    keep_local, comp_meta = _largest_xy_component(ceiling_verts[:, :2])
+    if len(keep_local) < min_ceiling_vertices:
+        return None
+    room_ceiling_verts = ceiling_verts[keep_local]
+
+    p = float(np.clip(rect_inset_percentile, 0.0, 10.0))
+    x_min = float(np.percentile(room_ceiling_verts[:, 0], p))
+    x_max = float(np.percentile(room_ceiling_verts[:, 0], 100.0 - p))
+    y_min = float(np.percentile(room_ceiling_verts[:, 1], p))
+    y_max = float(np.percentile(room_ceiling_verts[:, 1], 100.0 - p))
+    ceiling_z = float(np.median(room_ceiling_verts[:, 2]))
+
+    # Floor evidence: low-z vertices that fall inside the ceiling rectangle.
+    inside_rect = (
+        (verts[:, 0] >= x_min) & (verts[:, 0] <= x_max)
+        & (verts[:, 1] >= y_min) & (verts[:, 1] <= y_max)
+    )
+    inside_verts = verts[inside_rect]
+    floor_evidence_z: float | None = None
+    if len(inside_verts):
+        low_thresh = float(np.percentile(inside_verts[:, 2], 1.0)) + floor_band_m
+        floor_band = inside_verts[inside_verts[:, 2] <= low_thresh]
+        if len(floor_band) >= min_ceiling_vertices // 4:
+            floor_evidence_z = float(np.median(floor_band[:, 2]))
+
+    floor_fallback_z = ceiling_z - DEFAULT_ROOM_HEIGHT_M
+    if floor_evidence_z is None:
+        floor_z = floor_fallback_z
+        floor_source = "domain_prior_fallback"
+        height_disagreement = None
+    else:
+        floor_z = floor_evidence_z
+        floor_source = "rectangle_low_z"
+        height_disagreement = abs(floor_evidence_z - floor_fallback_z)
+
+    bounds_min = np.array([x_min, y_min, floor_z], dtype=np.float64)
+    bounds_max = np.array([x_max, y_max, ceiling_z], dtype=np.float64)
+    meta = {
+        "method": "ceiling_projection",
+        "n_ceiling_candidates": n_ceiling_raw,
+        "n_ceiling_in_largest_cc": int(len(keep_local)),
+        "ceiling_z": round(ceiling_z, 4),
+        "floor_z": round(floor_z, 4),
+        "floor_source": floor_source,
+        "floor_fallback_z": round(floor_fallback_z, 4),
+        "height_disagreement_m": (
+            None if height_disagreement is None else round(height_disagreement, 4)
+        ),
+        "height_disagreement_flagged": bool(
+            height_disagreement is not None
+            and height_disagreement > HEIGHT_DISAGREEMENT_FLAG_M
+        ),
+        "rect": {
+            "x_min": round(x_min, 4), "x_max": round(x_max, 4),
+            "y_min": round(y_min, 4), "y_max": round(y_max, 4),
+        },
+        "xy_components": comp_meta,
+    }
+    return bounds_min, bounds_max, meta
+
+
 def estimate_room_shell_prior(
     mesh: o3d.geometry.TriangleMesh,
     config: StructuralProtectionConfig | None = None,
@@ -110,9 +270,10 @@ def estimate_room_shell_prior(
     """Estimate a protected Manhattan cuboid shell from an aligned mesh.
 
     The mesh is assumed to be in the cleaner's room frame: floor near ``z=0``
-    and walls roughly axis-aligned.  Bounds use percentiles rather than raw
-    extrema so a small amount of clutter protruding beyond a wall does not move
-    the room shell.
+    and walls roughly axis-aligned. Bounds are derived from the ceiling
+    projection when enough ceiling vertices are detected geometrically;
+    otherwise the percentile fallback (legacy behaviour) is used so the bounds
+    don't get pulled by aisle bleed-through or window-side clutter.
     """
     cfg = config or StructuralProtectionConfig()
     verts = np.asarray(mesh.vertices, dtype=np.float64)
@@ -132,12 +293,28 @@ def estimate_room_shell_prior(
 
     mesh.compute_vertex_normals()
     normals = np.asarray(mesh.vertex_normals, dtype=np.float64)
-    if len(normals) != n:
-        normals = np.zeros_like(verts)
+    if len(normals) != n or not np.any(np.linalg.norm(normals, axis=1) > 1e-6):
+        # Point-cloud input (no triangles → compute_vertex_normals is a no-op).
+        # Estimate per-vertex normals via PCA on a kNN graph so the geometric
+        # ceiling filter has signal.
+        pcd = o3d.geometry.PointCloud()
+        pcd.points = o3d.utility.Vector3dVector(verts)
+        pcd.estimate_normals(
+            search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=0.15, max_nn=24),
+        )
+        normals = np.asarray(pcd.normals, dtype=np.float64)
+        if len(normals) != n:
+            normals = np.zeros_like(verts)
 
-    p = float(np.clip(cfg.outer_percentile, 0.0, 10.0))
-    bounds_min = np.percentile(verts, p, axis=0)
-    bounds_max = np.percentile(verts, 100.0 - p, axis=0)
+    ceiling_result = _estimate_bounds_from_ceiling(verts, normals)
+    if ceiling_result is not None:
+        bounds_min, bounds_max, ceiling_meta = ceiling_result
+        bounds_meta = ceiling_meta
+    else:
+        p = float(np.clip(cfg.outer_percentile, 0.0, 10.0))
+        bounds_min = np.percentile(verts, p, axis=0)
+        bounds_max = np.percentile(verts, 100.0 - p, axis=0)
+        bounds_meta = {"method": "percentile_fallback", "outer_percentile": p}
 
     protected = np.zeros(n, dtype=bool)
     labels = np.array(empty_labels, dtype=object)
@@ -178,7 +355,70 @@ def estimate_room_shell_prior(
         distance_to_shell=dist_best,
         confidence=confidence,
         config=cfg,
+        extra={"bounds": bounds_meta},
     )
+
+
+def trim_outside_shell(
+    mesh: o3d.geometry.TriangleMesh,
+    prior: RoomShellPrior,
+    margin_m: float = 0.05,
+) -> tuple[o3d.geometry.TriangleMesh, dict]:
+    """Drop vertices outside the prior's cuboid (plus a small margin).
+
+    Triangles are kept only if all three vertices survive. Vertex colors and
+    normals are carried through. Use this to strip aisle / window-side
+    outliers once a robust ceiling-driven shell has been estimated.
+    """
+    verts = np.asarray(mesh.vertices, dtype=np.float64)
+    n_in = len(verts)
+    if n_in == 0:
+        return o3d.geometry.TriangleMesh(mesh), {"enabled": True, "n_in": 0, "n_out": 0, "n_dropped": 0}
+
+    mn = prior.bounds_min.astype(np.float64) - margin_m
+    mx = prior.bounds_max.astype(np.float64) + margin_m
+    keep = (
+        (verts[:, 0] >= mn[0]) & (verts[:, 0] <= mx[0])
+        & (verts[:, 1] >= mn[1]) & (verts[:, 1] <= mx[1])
+        & (verts[:, 2] >= mn[2]) & (verts[:, 2] <= mx[2])
+    )
+    n_out = int(keep.sum())
+    if n_out == n_in:
+        return o3d.geometry.TriangleMesh(mesh), {
+            "enabled": True, "n_in": n_in, "n_out": n_in, "n_dropped": 0, "margin_m": margin_m,
+        }
+
+    old_to_new = np.full(n_in, -1, dtype=np.int64)
+    old_to_new[keep] = np.arange(n_out)
+
+    result = o3d.geometry.TriangleMesh()
+    result.vertices = o3d.utility.Vector3dVector(verts[keep])
+
+    triangles = np.asarray(mesh.triangles, dtype=np.int64)
+    if len(triangles):
+        tri_keep = keep[triangles[:, 0]] & keep[triangles[:, 1]] & keep[triangles[:, 2]]
+        new_tris = old_to_new[triangles[tri_keep]]
+        valid = (new_tris >= 0).all(axis=1)
+        new_tris = new_tris[valid]
+        result.triangles = o3d.utility.Vector3iVector(new_tris)
+
+    if mesh.has_vertex_colors():
+        colors = np.asarray(mesh.vertex_colors)
+        if len(colors) == n_in:
+            result.vertex_colors = o3d.utility.Vector3dVector(colors[keep])
+    if len(np.asarray(mesh.vertex_normals)) == n_in:
+        normals = np.asarray(mesh.vertex_normals)
+        result.vertex_normals = o3d.utility.Vector3dVector(normals[keep])
+    elif len(np.asarray(result.triangles)) > 0:
+        result.compute_vertex_normals()
+
+    return result, {
+        "enabled": True,
+        "n_in": n_in,
+        "n_out": n_out,
+        "n_dropped": n_in - n_out,
+        "margin_m": float(margin_m),
+    }
 
 
 def apply_structural_protection(

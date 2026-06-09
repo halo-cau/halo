@@ -27,6 +27,14 @@ Usage
 
   # Run both back-to-back:
   conda run -n halo python scripts/segment_scan.py --backend both ...all flags...
+
+  # Training-free foundation backends (gated weights — set HF_TOKEN first):
+  #   dinov3       — unsupervised DINOv3 feature clusters (name them by eye)
+  #   sam3_concept — SAM3 prompted directly with class names, no GroundingDINO
+  #   dinov3_sam3  — SAM3-seeded DINOv3 prototypes -> nearest-prototype labels
+  conda run -n halo python scripts/segment_scan.py --backend dinov3 --scan path/to.ply
+  conda run -n halo python scripts/segment_scan.py --backend dinov3_sam3 \\
+      --sam3-checkpoint '' --no-rack-prior   # '' => download SAM3 from HF
 """
 
 from __future__ import annotations
@@ -44,6 +52,7 @@ import open3d as o3d
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from engine.vision.cleaner import clean_and_align_meshes
+from engine.vision.dinov3_features import DEFAULT_DINOV3_MODEL
 from engine.vision.graph_fusion import GraphCleanupConfig, apply_graph_cleanup
 from engine.vision.segmentor_base import (
     PRESERVED_LABELS,
@@ -211,6 +220,64 @@ def run_dino_sam3(mesh: o3d.geometry.TriangleMesh, args: argparse.Namespace) -> 
     return seg.run(mesh, args.scan_path)
 
 
+def run_sam3_concept(mesh: o3d.geometry.TriangleMesh, args: argparse.Namespace) -> SegmentorResult:
+    from engine.vision.segmentor_sam3_concept import Sam3ConceptSegmentor
+    seg = Sam3ConceptSegmentor(
+        sam3_checkpoint=args.sam3_checkpoint or None,
+        n_horizontal=args.n_views_horizontal,
+        n_oblique=args.n_views_oblique,
+        render_width=args.render_width,
+        render_height=args.render_height,
+        sam3_confidence_threshold=args.sam3_confidence_threshold,
+        min_vote_fraction=args.min_vote_fraction,
+        protection_config=_build_protection_config(args),
+        graph_cleanup_config=_build_graph_config(args),
+        remove_movable=args.remove_movable,
+        apply_rack_prior=not args.no_rack_prior,
+    )
+    return seg.run(mesh, args.scan_path)
+
+
+def run_dinov3(mesh: o3d.geometry.TriangleMesh, args: argparse.Namespace) -> SegmentorResult:
+    from engine.vision.segmentor_dinov3 import Dinov3Segmentor
+    seg = Dinov3Segmentor(
+        model_name=args.dinov3_model,
+        half=not args.dinov3_no_half,
+        hf_token=args.hf_token,
+        n_horizontal=args.n_views_horizontal,
+        n_oblique=args.n_views_oblique,
+        render_width=args.render_width,
+        render_height=args.render_height,
+        n_clusters=args.n_clusters,
+        min_vote_fraction=args.min_vote_fraction,
+        protection_config=_build_protection_config(args),
+        graph_cleanup_config=_build_graph_config(args),
+    )
+    return seg.run(mesh, args.scan_path)
+
+
+def run_dinov3_sam3(mesh: o3d.geometry.TriangleMesh, args: argparse.Namespace) -> SegmentorResult:
+    from engine.vision.segmentor_dinov3 import Dinov3Sam3Segmentor
+    seg = Dinov3Sam3Segmentor(
+        sam3_checkpoint=args.sam3_checkpoint or None,
+        model_name=args.dinov3_model,
+        half=not args.dinov3_no_half,
+        hf_token=args.hf_token,
+        n_horizontal=args.n_views_horizontal,
+        n_oblique=args.n_views_oblique,
+        render_width=args.render_width,
+        render_height=args.render_height,
+        sam3_confidence_threshold=args.sam3_confidence_threshold,
+        min_similarity=args.min_similarity,
+        min_vote_fraction=args.min_vote_fraction,
+        protection_config=_build_protection_config(args),
+        graph_cleanup_config=_build_graph_config(args),
+        remove_movable=args.remove_movable,
+        apply_rack_prior=not args.no_rack_prior,
+    )
+    return seg.run(mesh, args.scan_path)
+
+
 def _build_protection_config(args: argparse.Namespace) -> StructuralProtectionConfig:
     min_votes = args.protection_min_votes
     return StructuralProtectionConfig(
@@ -359,6 +426,21 @@ def _run_dino_sam2_protection_sweep(
 # CLI
 # ---------------------------------------------------------------------------
 
+def _require_sam3_checkpoint(args: argparse.Namespace) -> None:
+    """Exit if a SAM3 checkpoint path was given but is missing.
+
+    Pass ``--sam3-checkpoint ''`` to skip this and download the gated Hugging
+    Face repo ``facebook/sam3`` instead (needs ``HF_TOKEN``).
+    """
+    if args.sam3_checkpoint and not Path(args.sam3_checkpoint).exists():
+        log.error(
+            "SAM3 checkpoint not found at %s. Pass --sam3-checkpoint '' to download "
+            "the gated Hugging Face repo facebook/sam3 (requires HF_TOKEN).",
+            args.sam3_checkpoint,
+        )
+        sys.exit(1)
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description="Run 3D segmentation on the server room scan.",
@@ -367,9 +449,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--scan", default=str(OBJ_PATH), help="Path to OBJ/PLY scan file.")
     p.add_argument(
         "--backend",
-        choices=["mask3d", "dino_sam2", "dino_sam3", "both"],
+        choices=[
+            "mask3d", "dino_sam2", "dino_sam3",
+            "sam3_concept", "dinov3", "dinov3_sam3", "both",
+        ],
         default="both",
-        help="Which segmentation backend(s) to run.",
+        help="Which segmentation backend(s) to run. 'both' = mask3d + dino_sam3.",
     )
     p.add_argument(
         "--output-suffix",
@@ -406,6 +491,22 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Minimum distinct rendered-view votes required before a vertex can be removed as movable clutter.")
     d.add_argument("--remove-movable", action="store_true",
                    help="Actually delete explicit movable labels. Disabled by default so the viewer/voxelizer keep the full picture before destructive cleanup.")
+
+    # ── DINOv3 / SAM3-concept (training-free foundation backends) ─────────
+    v = p.add_argument_group("DINOv3 / SAM3-concept options")
+    v.add_argument("--dinov3-model", default=DEFAULT_DINOV3_MODEL,
+                   help="DINOv3 Hugging Face model id (gated; needs HF_TOKEN).")
+    v.add_argument("--hf-token", default=None,
+                   help="Hugging Face token. If omitted, read from HF_TOKEN / HUGGING_FACE_HUB_TOKEN env.")
+    v.add_argument("--dinov3-no-half", action="store_true",
+                   help="Disable fp16 DINOv3 inference (use fp32 — needed on CPU).")
+    v.add_argument("--n-clusters", type=int, default=8,
+                   help="k for the unsupervised 'dinov3' clustering backend.")
+    v.add_argument("--min-similarity", type=float, default=0.45,
+                   help="Min cosine similarity for a DINOv3 patch to take a prototype's class (dinov3_sam3).")
+    v.add_argument("--no-rack-prior", action="store_true",
+                   help="Disable the 3D server-rack geometry prior for sam3_concept / dinov3_sam3 so raw model labels "
+                        "(incl. AC / box / cable tray) survive on interior verticals instead of being overwritten as 'server rack'.")
 
     # ── Structural shell protection ──────────────────────────────────────
     s = p.add_argument_group("Structural room-shell protection")
@@ -537,7 +638,7 @@ def main() -> None:
                     log.error("%s is required for the dino_sam2 backend.", name)
                     sys.exit(1)
             result = run_dino_sam2(aligned_mesh, args)
-        else:
+        elif backend == "dino_sam3":
             for flag, name in [
                 (args.dino_config,     "--dino-config"),
                 (args.dino_checkpoint, "--dino-checkpoint"),
@@ -545,13 +646,21 @@ def main() -> None:
                 if not flag:
                     log.error("%s is required for the dino_sam3 backend.", name)
                     sys.exit(1)
-            if args.sam3_checkpoint and not Path(args.sam3_checkpoint).exists():
-                log.error(
-                    "SAM3 checkpoint not found at %s. Download requires access to the gated Hugging Face repo facebook/sam3.",
-                    args.sam3_checkpoint,
-                )
-                sys.exit(1)
+            _require_sam3_checkpoint(args)
             result = run_dino_sam3(aligned_mesh, args)
+        elif backend == "sam3_concept":
+            # No GroundingDINO — SAM3 is prompted directly with class names.
+            _require_sam3_checkpoint(args)
+            result = run_sam3_concept(aligned_mesh, args)
+        elif backend == "dinov3":
+            # No SAM3 either — unsupervised DINOv3 feature clustering.
+            result = run_dinov3(aligned_mesh, args)
+        elif backend == "dinov3_sam3":
+            _require_sam3_checkpoint(args)
+            result = run_dinov3_sam3(aligned_mesh, args)
+        else:
+            log.error("Unknown backend %r.", backend)
+            sys.exit(1)
 
         print(f"\n  Results — {backend}:")
         print(f"    Total vertices : {result.n_total:,}")
