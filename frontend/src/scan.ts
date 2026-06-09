@@ -129,7 +129,7 @@ interface VisualizeResult {
   thermal: ThermalData | null;
   metrics: MetricsData | null;
 }
-let result: VisualizeResult | null = null;
+const result: VisualizeResult | null = null;
 
 // Semantic label → color mapping (matches legend, design-system palette)
 const LABEL_COLORS: Record<number, THREE.Color> = {
@@ -286,7 +286,11 @@ type ViewMode = "mesh" | "twin";
 let mode: ViewMode = "mesh";
 let twinJob: { id: string; outputs: Record<string, string> } | null = null;
 // twin stage -> the outputs key whose artifact it renders
-const TWIN_STAGE_KEY: Record<string, string> = { recon: "recon", semantic: "labeled", voxel: "voxel" };
+const TWIN_STAGE_KEY: Record<string, string> = {
+  recon: "recon",
+  semantic: "labeled",
+  voxel: "voxel",
+};
 
 function twinArtifactUrl(stage: string): string | null {
   const key = TWIN_STAGE_KEY[stage];
@@ -745,6 +749,78 @@ interface TwinStatus {
   error?: string;
 }
 
+// ── Background twin job: survives page navigation ─────────
+// The GPU pipeline (Pi3 + SAM3) is multi-minute and runs server-side in an isolated subprocess (a
+// single backend worker serializes jobs; progress is written to status.json on disk). So the browser
+// does NOT need to stay on this page: we persist the job id in localStorage, poll in a resumable way,
+// and reconnect on load. You can submit images, leave for any other page, and the twin will be waiting
+// when you return — whether it is still running or already finished.
+const ACTIVE_JOB_KEY = "halo.twin.job";
+
+function saveJob(jobId: string, kind: string): void {
+  localStorage.setItem(ACTIVE_JOB_KEY, JSON.stringify({ jobId, kind }));
+}
+function loadSavedJob(): { jobId: string; kind: string } | null {
+  try {
+    const v = localStorage.getItem(ACTIVE_JOB_KEY);
+    return v ? (JSON.parse(v) as { jobId: string; kind: string }) : null;
+  } catch {
+    return null;
+  }
+}
+function clearJob(): void {
+  localStorage.removeItem(ACTIVE_JOB_KEY);
+}
+
+let polling = false;
+
+// Poll a job to completion. Safe to call after an upload OR on page load to reconnect to a job that is
+// already running (or done) on the server. Manages the upload button and never blocks navigation.
+async function pollJob(jobId: string): Promise<void> {
+  if (polling) return;
+  polling = true;
+  uploadBtn.disabled = true;
+  try {
+    let s: TwinStatus = { state: "queued", step: "queued" };
+    while (s.state !== "done" && s.state !== "error") {
+      const resp = await fetch(`/api/v1/twin/${jobId}`);
+      if (resp.status === 404) {
+        clearJob();
+        setStatus("Previous job is no longer on the server — upload again", true);
+        return;
+      }
+      s = (await resp.json()) as TwinStatus;
+      setStatus(
+        `${s.step} — ${s.message ?? ""} (${s.pct ?? 0}%) · runs in the background; you can switch pages`,
+      );
+      if (s.state === "done" || s.state === "error") break;
+      await new Promise((res) => setTimeout(res, 2000));
+    }
+    if (s.state === "error") {
+      setStatus(`Error: ${s.error || s.message || "pipeline failed"}`, true);
+      clearJob();
+      return;
+    }
+
+    mode = "twin";
+    twinJob = { id: jobId, outputs: s.outputs ?? {} };
+    setStatus("done — showing the voxel twin", false);
+    enableTwinTabs();
+    setActiveStage("voxel");
+  } finally {
+    polling = false;
+    uploadBtn.disabled = false;
+  }
+}
+
+// On load, reconnect to the last submitted job (running or finished) so leaving and returning is seamless.
+function resumeSavedJob(): void {
+  const saved = loadSavedJob();
+  if (!saved) return;
+  setStatus("reconnecting to your reconstruction job…");
+  void pollJob(saved.jobId);
+}
+
 // ── Upload handler (multi-view images OR one geometry scan -> async twin job) ──
 uploadBtn.addEventListener("click", async () => {
   const files = Array.from(fileInput.files ?? []);
@@ -764,28 +840,21 @@ uploadBtn.addEventListener("click", async () => {
       const e = await r.json().catch(() => ({ detail: r.statusText }));
       throw new Error(e.detail || `HTTP ${r.status}`);
     }
-    const { job_id } = (await r.json()) as { job_id: string };
+    const { job_id, kind } = (await r.json()) as { job_id: string; kind: string };
 
-    // poll until done — the multi-view front is multi-minute + GPU-bound, hence the async job model
-    let s: TwinStatus = { state: "queued", step: "queued" };
-    while (s.state !== "done" && s.state !== "error") {
-      await new Promise((res) => setTimeout(res, 2000));
-      s = (await (await fetch(`/api/v1/twin/${job_id}`)).json()) as TwinStatus;
-      setStatus(`${s.step} — ${s.message ?? ""} (${s.pct ?? 0}%)`);
-    }
-    if (s.state === "error") throw new Error(s.error || s.message || "pipeline failed");
-
-    mode = "twin";
-    twinJob = { id: job_id, outputs: s.outputs ?? {} };
-    setStatus("done — showing the voxel twin", false);
-    enableTwinTabs();
-    setActiveStage("voxel");
+    // Persist, then poll WITHOUT awaiting — the job is isolated on the server, so navigation is free.
+    saveJob(job_id, kind);
+    setStatus(
+      "queued — reconstruction runs in the background. You can switch pages and come back.",
+    );
+    void pollJob(job_id);
   } catch (err: unknown) {
     setStatus(`Error: ${err instanceof Error ? err.message : String(err)}`, true);
-  } finally {
     uploadBtn.disabled = false;
   }
 });
+
+resumeSavedJob();
 
 // ── Edit handler (transition to the per-instance room editor for the current twin) ──
 editBtn.addEventListener("click", () => {
@@ -796,4 +865,3 @@ editBtn.addEventListener("click", () => {
   // same-origin editor page (served from dist); reads placements.json + posts to /api/v1/twin/{id}/restamp
   window.location.href = `./editor.html?job=${twinJob.id}`;
 });
-
