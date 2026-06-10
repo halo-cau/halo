@@ -4,11 +4,12 @@
 VOXEL_SIZE: float = 0.1  # 1 voxel = 0.1 m (10 cm)
 
 # --- Grid Limits (meters) ---
-MAX_ROOM_DIMENSIONS: tuple[float, float, float] = (20.0, 20.0, 6.0)
+MAX_ROOM_DIMENSIONS: tuple[float, float, float] = (10.0, 10.0, 5.0)
 
-# Fixed observation shape for the RL environment.
-# Derived from MAX_ROOM_DIMENSIONS / VOXEL_SIZE → (200, 200, 60).
-GRID_SHAPE: tuple[int, int, int] = (200, 200, 60)
+# Maximum voxel grid that can represent any room within MAX_ROOM_DIMENSIONS.
+# Derived from MAX_ROOM_DIMENSIONS / VOXEL_SIZE → (100, 100, 50).
+# Actual scanned rooms are smaller; unused voxels are padded with SPACE_EMPTY.
+GRID_SHAPE: tuple[int, int, int] = (100, 100, 50)
 
 # --- Semantic Tags (np.int8 values) ---
 SPACE_EMPTY: int = 0
@@ -39,8 +40,37 @@ RANSAC_DISTANCE_THRESHOLD: float = 0.02
 RANSAC_NUM_POINTS: int = 3
 RANSAC_NUM_ITERATIONS: int = 1000
 
+# --- Manhattan World Rectification (iterative RANSAC plane extraction) ---
+# Plane normal must lie within this angle of a principal axis to qualify as a
+# structural wall / floor / ceiling.
+MANHATTAN_NORMAL_TOL_DEG: float = 25.0
+# Maximum number of dominant planes extracted in one pass.
+MANHATTAN_MAX_PLANES: int = 12
+# RANSAC inlier distance: vertices within this distance of the fitted plane
+# are treated as members of that structural surface. Tight (3 cm) so objects
+# protruding from walls (AC units, door frames, racks) are NOT included.
+MANHATTAN_PLANE_INLIER_DIST_M: float = 0.03
+# A plane must contain at least this fraction of total vertices to be
+# considered structural. Filters out small object faces (rack panels, cabinet
+# sides).
+MANHATTAN_MIN_PLANE_INLIER_FRAC: float = 0.01
+
 # --- Morphological Closing ---
 CLOSING_ITERATIONS: int = 2
+
+# --- Manhattan World Rectification (iterative RANSAC plane extraction) ---
+# Plane normal must lie within this angle of a principal axis to qualify as a
+# structural wall / floor / ceiling.
+MANHATTAN_NORMAL_TOL_DEG: float = 25.0
+# Maximum number of dominant planes extracted in one pass.
+MANHATTAN_MAX_PLANES: int = 12
+# RANSAC inlier distance: vertices within this distance of the fitted plane are
+# treated as members of that structural surface.  Tight (3 cm) so that objects
+# protruding from walls (AC units, door frames, racks) are NOT included.
+MANHATTAN_PLANE_INLIER_DIST_M: float = 0.03
+# A plane must contain at least this fraction of total vertices to be considered
+# structural.  Filters out small object faces (rack panels, cabinet sides).
+MANHATTAN_MIN_PLANE_INLIER_FRAC: float = 0.01
 
 # --- Gaussian Heat Injection ---
 HEAT_RADIUS_VOXELS: int = 5
@@ -52,6 +82,11 @@ STAMP_RADIUS_VOXELS: int = 3
 # --- Workspace (desk) dimensions in metres ---
 WORKSPACE_DIMENSIONS: tuple[float, float, float] = (1.2, 0.6, 0.75)  # width, depth, height
 
+# --- Canonical AC unit dimensions in metres ---
+# Width × depth × height. Used as the prior when stamping detected AC units
+# so the voxelized AC is a solid block, not a hollow point-cloud shell.
+AC_UNIT_DIMENSIONS: tuple[float, float, float] = (1.5, 0.5, 2.0)
+
 # --- ASHRAE Standard Rack Dimensions (metres) ---
 # Based on EIA-310 / ASHRAE TC 9.9 standard 19" server racks.
 # Each rack type is (width, depth, height).
@@ -60,8 +95,15 @@ RACK_DIMENSIONS: dict[str, tuple[float, float, float]] = {
     "42U_deep": (0.60, 1.20, 2.00),  # 42U × 600mm wide × 1200mm deep
     "42U_wide": (0.75, 1.00, 2.00),  # 42U × 750mm wide × 1000mm deep
     "48U": (0.60, 1.00, 2.26),   # 48U × 600mm wide × 1000mm deep
+    # Measured server-room prior (target room): 600mm W × 900mm D × 1950mm H. Used by the CV/twin
+    # voxelizer to anchor metric scale on the rack HEIGHT and to stamp racks at the true size; kept
+    # separate from "42U" so the trained RL footprint is not disturbed.
+    "42U_real": (0.60, 0.90, 1.95),
 }
 DEFAULT_RACK_TYPE: str = "42U"
+# Standalone NETWORK rack prior (taller than a 42U): width 600mm × depth 750mm × height 2200mm.
+NETWORK_RACK_DIMENSIONS: tuple[float, float, float] = (0.60, 0.75, 2.20)
+NETWORK_RACK_HEIGHT: float = NETWORK_RACK_DIMENSIONS[2]
 
 # ASHRAE TC 9.9 recommended inlet temperature range (°C) for A1-class.
 ASHRAE_INLET_TEMP_RANGE: tuple[float, float] = (18.0, 27.0)

@@ -79,6 +79,31 @@ class ScanMetadata:
 
 
 @dataclass(frozen=True)
+class ComponentInstance:
+    """A single detected object instance from the segmentation pass.
+
+    Used by the frontend to render selectable items (one chip per rack /
+    AC unit / clutter item) so operators can later toggle individual
+    instances on or off.
+
+    Attributes:
+        id: Stable integer identifier within a scan.
+        label: Canonical semantic label (e.g. "server rack", "ac_unit").
+        center: World-space (x, y, z) center of the component's bbox.
+        bounds_min: World-space (x, y, z) min corner of the bbox.
+        bounds_max: World-space (x, y, z) max corner of the bbox.
+        n_points: Source vertices in this component (segmentation strength).
+    """
+
+    id: int
+    label: str
+    center: tuple[float, float, float]
+    bounds_min: tuple[float, float, float]
+    bounds_max: tuple[float, float, float]
+    n_points: int
+
+
+@dataclass(frozen=True)
 class PipelineResult:
     """Output of the full CV pipeline.
 
@@ -86,13 +111,25 @@ class PipelineResult:
         grid: Semantic voxel grid with shape matching the actual room.
         padded_grid: Same data zero-padded to GRID_SHAPE — fixed-size
             observation for the RL environment.
+        layout_grid: Shell-only cuboid (walls + air, no infrastructure),
+            same shape and origin as ``grid``. Useful as an "empty room"
+            baseline for visualisation and what-if analyses.
+        padded_layout_grid: ``layout_grid`` zero-padded to GRID_SHAPE.
         origin: World-space offset of voxel index [0,0,0] in the
             unpadded grid, in meters.
         grid_offset: Index offset where ``grid`` is placed inside
             ``padded_grid``, i.e. ``padded_grid[ox:ox+gx, ...]``.
+        components: Detected segmentation instances. Empty when no
+            segmentor ran. The frontend uses this for per-instance edits.
+        backend: Name of the segmentor backend that produced the labels,
+            or ``None`` if segmentation was skipped.
     """
 
     grid: np.ndarray
     padded_grid: np.ndarray
+    layout_grid: np.ndarray
+    padded_layout_grid: np.ndarray
     origin: np.ndarray
     grid_offset: tuple[int, int, int]
+    components: tuple[ComponentInstance, ...] = ()
+    backend: str | None = None

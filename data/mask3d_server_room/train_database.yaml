@@ -1,0 +1,10 @@
+- filepath: /home/ppco915/projects/Capstone/data/mask3d_server_room/train/las6.npy
+  scene: las6
+  raw_filepath: /home/ppco915/projects/Capstone/server_room_phone/pipeline_vis_las6/s3_manhattan.ply
+  file_len: 861941
+  instance_gt_filepath: /home/ppco915/projects/Capstone/data/mask3d_server_room/instance_gt/train/las6.txt
+- filepath: /home/ppco915/projects/Capstone/data/mask3d_server_room/train/las6_corrected.npy
+  scene: las6_corrected
+  raw_filepath: /home/ppco915/projects/Capstone/server_room_phone/pipeline_vis_las6/s3_manhattan.ply
+  file_len: 861941
+  instance_gt_filepath: /home/ppco915/projects/Capstone/data/mask3d_server_room/instance_gt/train/las6_corrected.txt

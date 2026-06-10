@@ -50,6 +50,19 @@ class TestO3dToGlb:
         glb = o3d_to_glb(mesh)
         assert glb[:4] == b"glTF"
 
+    def test_exports_vertex_only_point_cloud(self) -> None:
+        import numpy as np
+
+        mesh = o3d.geometry.TriangleMesh()
+        mesh.vertices = o3d.utility.Vector3dVector(
+            np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0]], dtype=float)
+        )
+        mesh.vertex_colors = o3d.utility.Vector3dVector(
+            np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1]], dtype=float)
+        )
+        glb = o3d_to_glb(mesh)
+        assert glb[:4] == b"glTF"
+
 
 class TestPaintSemanticColors:
     """Tests for semantic vertex coloring."""

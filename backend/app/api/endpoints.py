@@ -24,7 +24,7 @@ async def process_scan(
     file: UploadFile = File(...),
     metadata: str = Form(...),
 ) -> ProcessScanResponse:
-    """Ingest an .obj mesh and metadata, return a semantic grid summary."""
+    """Ingest a room scan and metadata, return a semantic grid summary."""
 
     # --- Validate file extension ---
     filename = file.filename or ""

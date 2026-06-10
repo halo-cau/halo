@@ -1,0 +1,207 @@
+diff --git a/mask3d/__init__.py b/mask3d/__init__.py
+index 9d153b3..a5f813e 100644
+--- a/mask3d/__init__.py
++++ b/mask3d/__init__.py
+@@ -29,7 +29,7 @@ import numpy as np
+ import open3d as o3d
+ 
+ # imports for output
+-from datasets.scannet200.scannet200_constants import (VALID_CLASS_IDS_20, VALID_CLASS_IDS_200, SCANNET_COLOR_MAP_20, SCANNET_COLOR_MAP_200)
++from mask3d.datasets.scannet200.scannet200_constants import (VALID_CLASS_IDS_20, VALID_CLASS_IDS_200, SCANNET_COLOR_MAP_20, SCANNET_COLOR_MAP_200)
+ 
+ def get_model(checkpoint_path=None):
+ 
+@@ -74,11 +74,27 @@ def get_model(checkpoint_path=None):
+ 
+         # # model
+         cfg.model.num_queries = 150
+-        
++
+         #TODO: this has to be fixed and discussed with Jonas
+         # cfg.model.scene_min = -3.
+         # cfg.model.scene_max = 3.
+ 
++    if dataset_name == 'halo':
++        # HALO 6-class server-room schema (wall/floor/ceiling/server_rack/
++        # box_clutter/ac_unit). Finetuned from a single overfit scene.
++        cfg.general.num_targets = 7              # 6 classes + 1 "no-object"
++        cfg.general.train_mode = False
++        cfg.general.eval_on_segments = False
++        cfg.general.topk_per_image = 100
++        cfg.general.use_dbscan = False
++        cfg.general.export_threshold = 0.001
++
++        cfg.data.num_labels = 6
++        cfg.data.test_mode = "test"
++
++        # ~13 racks + 1 AC + 2 clutter + 3 structural + headroom
++        cfg.model.num_queries = 100
++
+     # # Initialize the Hydra context
+     # hydra.core.global_hydra.GlobalHydra.instance().clear()
+     # hydra.initialize(config_path="conf")
+diff --git a/mask3d/datasets/semseg.py b/mask3d/datasets/semseg.py
+index a848b1a..3d88420 100644
+--- a/mask3d/datasets/semseg.py
++++ b/mask3d/datasets/semseg.py
+@@ -128,6 +128,17 @@ class SemanticSegmentationDataset(Dataset):
+                 11: [200, 200, 200],  # board
+                 12: [50, 50, 50],  # clutter
+             }
++        elif self.dataset_name == "halo_server_room":
++            # 6-class HALO schema. Colors match data/mask3d_server_room/label_database.yaml.
++            self.color_map = {
++                0: [55, 138, 221],   # wall
++                1: [180, 178, 169],  # floor
++                2: [232, 229, 221],  # ceiling
++                3: [29, 158, 117],   # server_rack
++                4: [232, 158, 79],   # box_clutter
++                5: [36, 169, 225],   # ac_unit
++                255: [128, 128, 128],
++            }
+         else:
+             assert False, "dataset not known"
+ 
+@@ -214,10 +225,9 @@ class SemanticSegmentationDataset(Dataset):
+             self._data = sample(
+                 self._data, int(len(self._data) * data_percent)
+             )
+-        # labels = self._load_yaml(Path(label_db_filepath))
+-
++        labels = self._load_yaml(Path(label_db_filepath))
+         # if working only on classes for validation - discard others
+-        # self._labels = self._select_correct_labels(labels, num_labels)
++        self._labels = self._select_correct_labels(labels, num_labels)
+ 
+         if instance_oversampling > 0:
+             self.instance_data = self._load_yaml(
+@@ -694,8 +704,7 @@ class SemanticSegmentationDataset(Dataset):
+     @staticmethod
+     def _load_yaml(filepath):
+         with open(filepath) as f:
+-            # file = yaml.load(f, Loader=Loader)
+-            file = yaml.load(f)
++            file = yaml.safe_load(f)
+         return file
+ 
+     def _select_correct_labels(self, labels, num_labels):
+diff --git a/mask3d/main_instance_segmentation.py b/mask3d/main_instance_segmentation.py
+index c266467..0c60e98 100644
+--- a/mask3d/main_instance_segmentation.py
++++ b/mask3d/main_instance_segmentation.py
+@@ -74,11 +74,18 @@ def train(cfg: DictConfig):
+ 
+     callbacks.append(RegularCheckpointing())
+ 
++    # LearningRateMonitor in the callbacks list needs a logger. The original
++    # cvg fork has WandbLogger composition commented out (see get_parameters),
++    # so fall back to a local CSV logger when no wandb is configured.
++    if not loggers:
++        from pytorch_lightning.loggers import CSVLogger
++        loggers = [CSVLogger(save_dir=str(cfg.general.save_dir), name="csv")]
++
+     runner = Trainer(
+         logger=loggers,
+         gpus=cfg.general.gpus,
+         callbacks=callbacks,
+-        weights_save_path=str(cfg.general.save_dir),
++        default_root_dir=str(cfg.general.save_dir),
+         **cfg.trainer,
+     )
+     runner.fit(model)
+@@ -94,7 +101,7 @@ def test(cfg: DictConfig):
+     runner = Trainer(
+         gpus=cfg.general.gpus,
+         logger=loggers,
+-        weights_save_path=str(cfg.general.save_dir),
++        default_root_dir=str(cfg.general.save_dir),
+         **cfg.trainer,
+     )
+     runner.test(model)
+diff --git a/mask3d/models/__init__.py b/mask3d/models/__init__.py
+index b092c96..94af411 100644
+--- a/mask3d/models/__init__.py
++++ b/mask3d/models/__init__.py
+@@ -1,5 +1,6 @@
+ import mask3d.models.resunet as resunet
+ import mask3d.models.res16unet as res16unet
++import mask3d.models.mask3d as mask3d_module
+ from mask3d.models.res16unet import (
+     Res16UNet34C,
+     Res16UNet34A,
+@@ -20,7 +21,7 @@ def add_models(module):
+ 
+ add_models(resunet)
+ add_models(res16unet)
+-add_models(mask3d)
++add_models(mask3d_module)
+ 
+ 
+ def get_models():
+diff --git a/mask3d/models/mask3d.py b/mask3d/models/mask3d.py
+index af95f7d..4d09732 100644
+--- a/mask3d/models/mask3d.py
++++ b/mask3d/models/mask3d.py
+@@ -69,7 +69,14 @@ class Mask3D(nn.Module):
+         self.num_queries = num_queries
+         self.pos_enc_type = positional_encoding_type
+ 
+-        self.backbone = hydra.utils.instantiate(config.backbone)
++        # Hydra 1.3 recursively instantiates nested `_target_` entries before
++        # calling this constructor. Older Hydra versions left `config.backbone`
++        # as a DictConfig, so keep supporting both behaviours.
++        self.backbone = (
++            config.backbone
++            if isinstance(config.backbone, nn.Module)
++            else hydra.utils.instantiate(config.backbone)
++        )
+         self.num_levels = len(self.hlevels)
+         sizes = self.backbone.PLANES[-5:]
+ 
+diff --git a/mask3d/utils/utils.py b/mask3d/utils/utils.py
+index b7bb374..1371173 100644
+--- a/mask3d/utils/utils.py
++++ b/mask3d/utils/utils.py
+@@ -33,13 +33,13 @@ def load_baseline_model(cfg, model):
+     cfg.data.test_dataset.color_mean_std = [(0.5, 0.5, 0.5), (1, 1, 1)]
+     cfg.data.voxel_size = 0.02
+     model = model(cfg)
+-    state_dict = torch.load(cfg.general.checkpoint)["state_dict"]
++    state_dict = torch.load(cfg.general.checkpoint, weights_only=False)["state_dict"]
+     model.model.load_state_dict(state_dict)
+     return cfg, model
+ 
+ 
+ def load_backbone_checkpoint_with_missing_or_exsessive_keys(cfg, model):
+-    state_dict = torch.load(cfg.general.backbone_checkpoint)["state_dict"]
++    state_dict = torch.load(cfg.general.backbone_checkpoint, weights_only=False)["state_dict"]
+     correct_dict = dict(model.state_dict())
+ 
+     # if parametrs not found in checkpoint they will be randomly initialized
+@@ -50,7 +50,7 @@ def load_backbone_checkpoint_with_missing_or_exsessive_keys(cfg, model):
+             )
+ 
+     # if parametrs have different shape, it will randomly initialize
+-    state_dict = torch.load(cfg.general.backbone_checkpoint)["state_dict"]
++    state_dict = torch.load(cfg.general.backbone_checkpoint, weights_only=False)["state_dict"]
+     correct_dict = dict(model.state_dict())
+     for key in correct_dict.keys():
+         if key.replace("model.backbone.", "") not in state_dict:
+@@ -82,7 +82,7 @@ def load_backbone_checkpoint_with_missing_or_exsessive_keys(cfg, model):
+ 
+ 
+ def load_checkpoint_with_missing_or_exsessive_keys(cfg, model):
+-    state_dict = torch.load(cfg.general.checkpoint)["state_dict"]
++    state_dict = torch.load(cfg.general.checkpoint, weights_only=False)["state_dict"]
+     correct_dict = dict(model.state_dict())
+ 
+     # if parametrs not found in checkpoint they will be randomly initialized
+@@ -93,7 +93,7 @@ def load_checkpoint_with_missing_or_exsessive_keys(cfg, model):
+             )
+ 
+     # if parametrs have different shape, it will randomly initialize
+-    state_dict = torch.load(cfg.general.checkpoint)["state_dict"]
++    state_dict = torch.load(cfg.general.checkpoint, weights_only=False)["state_dict"]
+     correct_dict = dict(model.state_dict())
+     for key in correct_dict.keys():
+         if key not in state_dict:

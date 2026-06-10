@@ -181,8 +181,8 @@
       <div class="panel">
         <h2>Upload Scan</h2>
 
-        <label for="obj-file">.obj Mesh File</label>
-        <input type="file" id="obj-file" accept=".obj" />
+        <label for="obj-file">Multi-view images (≥2) — or one scan (.obj/.ply/.las)</label>
+        <input type="file" id="obj-file" accept=".obj,.ply,.las,.laz,.heic,.heif,image/*" multiple />
 
         <label for="metadata">Metadata (JSON)</label>
         <textarea id="metadata" placeholder='{
@@ -195,13 +195,16 @@
         <div class="status" id="status"></div>
 
         <div class="stage-btns" id="stage-btns" style="display:none;">
-          <button type="button" class="stage-btn active" data-stage="raw">Raw</button>
-          <button type="button" class="stage-btn" data-stage="cleaned">Cleaned</button>
-          <button type="button" class="stage-btn" data-stage="semantic">Semantic</button>
-          <button type="button" class="stage-btn" data-stage="voxel">Voxel</button>
+          <button type="button" class="stage-btn" data-stage="recon">Recon</button>
+          <button type="button" class="stage-btn" data-stage="semantic">SAM3 Labels</button>
+          <button type="button" class="stage-btn" data-stage="sam3class">SAM3 (class)</button>
+          <button type="button" class="stage-btn active" data-stage="voxel">Voxel</button>
+          <button type="button" class="stage-btn" data-stage="layout">Layout</button>
           <button type="button" class="stage-btn" data-stage="thermal">Thermal</button>
           <button type="button" class="stage-btn" data-stage="ashrae">ASHRAE</button>
         </div>
+
+        <button type="button" class="btn" id="edit-btn" style="display:none; margin-top:12px;">Edit Room</button>
 
         <div class="legend" id="legend" style="display:none;">
           <h3>Semantic Colors</h3>
@@ -215,10 +218,6 @@
         </div>
 
         <div class="metrics-panel" id="metrics-panel" style="display:none;"></div>
-
-        <div id="demo-section" style="margin-top: 20px; border-top: 0.5px solid var(--border); padding-top: 16px;">
-          <button type="button" class="btn" id="demo-btn">Load Demo Room</button>
-        </div>
       </div>
 
       <canvas id="viewer"></canvas>
