@@ -79,13 +79,18 @@ def _ashrae_reward_from_metrics(metrics) -> float:
 class DataCenterEnv(gym.Env):
     metadata = {"render_modes": ["rgb_array"]}
 
-    def __init__(self, grid_size=50, rack_num=10, num_cooler=3, ceiling_m: float = 3.0):
+    def __init__(self, grid_size=50, rack_num=10, num_cooler=3, ceiling_m: float = 3.0,
+                 placement_mode: str = "row"):
         super().__init__()
 
         self.grid_size = grid_size
         self.rack_num = rack_num
         self.num_cooler = num_cooler
         self.ceiling_m = ceiling_m
+        # "row" (default): one action places an aligned ROW of racks, so hot/cold-aisle alignment is a
+        # property of the action space, not something the reward must discover. "single": the original
+        # one-rack-per-step action, kept for ablation. Both share the same Discrete(grid^2 * 4) space.
+        self.placement_mode = placement_mode
 
         # rack_map[gx, gy] = 1 at the INTAKE FACE CENTER of each placed rack.
         # Used by ThermalBridge to locate racks and read their facing direction.
@@ -179,6 +184,47 @@ class DataCenterEnv(gym.Env):
         return self._get_obs(), {}
 
     def step(self, action):
+        """Dispatch to the configured placement mode (``row`` default, ``single`` for ablation)."""
+        if self.placement_mode == "row":
+            return self._step_row(action)
+        return self._step_single(action)
+
+    def _finish_episode(self):
+        """Run the authoritative 3-D thermal solve once and return (terminal_reward, info).
+
+        The reward is a deterministic function of the layout: the bridge applies a CONSTANT per-rack power
+        (``ThermalBridge.power_kw``), the solver has no randomness, and the metrics are numpy only. The
+        ``rack_power`` randomisation in ``_step_single`` feeds only the disabled 2-D model and does NOT
+        reach this reward, so the same layout always scores the same.
+        """
+        if not self.rack_map.any():
+            return -10.0, {}
+        metrics, temp_2d, cooling_energy = self._bridge.solve_metrics(
+            self.rack_map, self.rack_dir, self.obstacle, self.cooling_pos,
+        )
+        reward = _ashrae_reward_from_metrics(metrics) if metrics is not None else -10.0
+        return reward, {"metrics": metrics, "temp": temp_2d, "total_energy": cooling_energy}
+
+    def _place_one(self, gx, gy, dir_idx, power) -> bool:
+        """Validate the full 42U footprint at intake cell (gx, gy) facing dir_idx; stamp it if free.
+
+        Returns True when the rack was placed, False when the footprint leaves the grid or overlaps an
+        obstacle or an already placed rack.
+        """
+        footprint = self._rack_footprint(gx, gy, dir_idx)
+        for fx, fy in footprint:
+            if not (0 <= fx < self.grid_size and 0 <= fy < self.grid_size):
+                return False
+            if self.rack_occupied[fx, fy] == 1 or self.obstacle[fx, fy] == 1:
+                return False
+        for fx, fy in footprint:
+            self.rack_occupied[fx, fy] = 1
+        self.rack_map[gx, gy] = 1
+        self.rack_dir[gx, gy] = dir_idx
+        self.rack_power[gx, gy] = power
+        return True
+
+    def _step_single(self, action):
         pos = action // 4
         dir = action % 4
 
@@ -200,28 +246,67 @@ class DataCenterEnv(gym.Env):
         self.rack_power[x, y] = np.random.uniform(0.8, 2.5)
 
         self.step_count += 1
-
         done = self.step_count >= self.rack_num
-
         self.flow_dirty = True
 
         if done:
-            # Episode end: run the 3-D thermal engine once for the final reward.
-            metrics, temp_2d, cooling_energy = self._bridge.solve_metrics(
-                self.rack_map,
-                self.rack_dir,
-                self.obstacle,
-                self.cooling_pos,
-            )
-            reward = (
-                _ashrae_reward_from_metrics(metrics) if metrics is not None else -10.0
-            )
-            info = {"metrics": metrics, "temp": temp_2d, "total_energy": cooling_energy}
+            reward, info = self._finish_episode()
         else:
             reward = self._position_shaping_reward()
             info = {}
-
         return self._get_obs(), reward, done, False, info
+
+    def _step_row(self, action):
+        """Place an aligned ROW of racks in one action.
+
+        The action decodes to an anchor cell (the first rack's intake face) and an exhaust direction. The
+        row runs along the axis PERPENDICULAR to the facing and auto-extends from the anchor, adding racks
+        one rack-width apart, until the next rack would leave the grid, hit an obstacle or a placed rack, or
+        the rack budget (``rack_num``) is reached. Every rack in the row shares the facing and lies on one
+        line, so within-row hot/cold-aisle alignment holds by construction; the reward only judges where the
+        rows go (spacing, orientation relative to the coolers).
+        """
+        anchor = action // 4
+        d = action % 4
+        ax = anchor // self.grid_size
+        ay = anchor % self.grid_size
+
+        # Width axis is perpendicular to the depth/facing axis; step one rack-width along it per rack.
+        if d in (0, 1):          # facing/depth along X  -> row spans Y
+            sx, sy = 0, _RACK_W_CELLS
+        else:                    # facing/depth along Y  -> row spans X
+            sx, sy = _RACK_W_CELLS, 0
+
+        placed = 0
+        for k in range(self.grid_size):                  # hard cap = one rack-width per grid cell
+            if self.step_count + placed >= self.rack_num:
+                break
+            if not self._place_one(ax + sx * k, ay + sy * k, d, power=1.65):
+                break
+            placed += 1
+
+        if placed == 0:
+            # The anchor could not seat even one rack (room full / blocked). End the episode and score
+            # whatever is already placed (or penalise an empty layout via _finish_episode).
+            reward, info = self._finish_episode()
+            return self._get_obs(), reward, True, False, info
+
+        self.step_count += placed
+        self.flow_dirty = True
+        done = self.step_count >= self.rack_num
+
+        if done:
+            reward, info = self._finish_episode()
+        else:
+            reward = self._row_shaping_reward()
+            info = {}
+        return self._get_obs(), reward, done, False, info
+
+    def _row_shaping_reward(self) -> float:
+        """Per-row shaping. With rows the within-row alignment is structural and episodes are only a few
+        steps long, so the sparse terminal ASHRAE reward is already tractable; no dense drift term is added
+        (a constant per-step bonus would just bias the agent toward placing more rows)."""
+        return 0.0
 
     def _rack_footprint(self, gx: int, gy: int, dir_idx: int) -> list[tuple[int, int]]:
         """All (x, y) RL cells occupied by a 42U rack whose intake face is at (gx, gy).
@@ -268,6 +353,14 @@ class DataCenterEnv(gym.Env):
             (self.grid_size, self.grid_size), (self.num_cooler / 10.0), dtype=np.float32
         )
 
+        # Exhaust-direction field: the single most relevant variable for the aisle relation (which way each
+        # placed rack blows) was previously absent from the observation. Encode it at each rack's intake
+        # cell as (dir + 1) / 4 in [0,1] so the policy can reason about exhaust-to-intake interactions. This
+        # replaces the dead all-zero channel of the disabled 2-D temperature model.
+        facing_field = np.zeros((self.grid_size, self.grid_size), dtype=np.float32)
+        for rx, ry in np.argwhere(self.rack_map == 1):
+            facing_field[rx, ry] = (self.rack_dir[rx, ry] + 1.0) / 4.0
+
         return np.stack(
             [
                 self.rack_occupied.astype(np.float32),
@@ -275,7 +368,7 @@ class DataCenterEnv(gym.Env):
                 density_map,
                 cooler_map,
                 dist_map,
-                np.zeros_like(density_map),
+                facing_field,
                 rack_num_ch,
                 cooling_num_ch,
             ],
@@ -460,12 +553,20 @@ class DataCenterEnv(gym.Env):
             if dist <= aisle_range:
                 r_aisle += 0.05 * dot / dist
 
-        return float(r_aisle + 0.05)
+        # Zero-centred: no constant per-step bonus. A fixed +0.05 floor (as before) accumulates to +0.05·N
+        # of guaranteed reward regardless of layout quality, which biases the agent toward simply placing
+        # more racks; the terminal ASHRAE reward should dominate.
+        return float(r_aisle)
 
     def _cooling_dist_map(self):
+        # No cooler placed yet (e.g. a macro-action environment where the AC is itself an action): cells are
+        # equally far from "no cooler", so return a uniform max-distance map instead of reducing over an
+        # empty axis.
+        cp = np.asarray(self.cooling_pos)
+        if cp.size == 0:
+            return np.ones((self.grid_size, self.grid_size), dtype=np.float32)
         dist = np.sqrt(
-            (self.X[:, :, None] - self.cooling_pos[:, 0]) ** 2
-            + (self.Y[:, :, None] - self.cooling_pos[:, 1]) ** 2
+            (self.X[:, :, None] - cp[:, 0]) ** 2 + (self.Y[:, :, None] - cp[:, 1]) ** 2
         )
         d = np.min(dist, axis=-1)
         return d / (np.max(d) + 1e-6)
@@ -515,7 +616,13 @@ class DataCenterEnv(gym.Env):
                             mask[i, j, d] = 0.0
                             break
 
-        return mask.flatten()
+        flat = mask.flatten()
+        # Never return an all-zero mask: a MaskableCategorical over an empty action set is undefined. When
+        # no placement remains (room full), unmask everything; the chosen action seats zero racks and the
+        # row/single step ends the episode and scores what is already placed.
+        if not flat.any():
+            flat[:] = 1.0
+        return flat
 
     def action_masks(self):
         return self.get_action_mask()

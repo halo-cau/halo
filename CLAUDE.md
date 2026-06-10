@@ -140,4 +140,8 @@ Known reconciliation points when merging `feat/cv` and `feat/split-view`:
   `HALO_DINO_CHECKPOINT`; `HF_TOKEN` for HF-gated SAM3/DINOv3.
 - `HALO_PY` — interpreter for the GPU subprocess (default `/home/ppco915/ENTER/envs/halo/bin/python`).
   `TWIN_RUNS` — job/artifact directory (default `tools/recon_web/runs`).
+- `TWIN_PRECOMPUTED_SAMPLE` — names a run under `TWIN_RUNS` whose artifacts a submitted twin job is served
+  from (flagged `precomputed`) instead of running the live pipeline. Intended for live demos only: the
+  multi-view Pi3 reconstruction + SAM3 segmentation over ~1M points takes several minutes on the GPU, too
+  long to run in front of an audience. Unset (the default) every job runs the real pipeline.
 - `PYOPENGL_PLATFORM=egl`, `HF_HUB_OFFLINE`, `PYTORCH_CUDA_ALLOC_CONF` are set for the subprocess.

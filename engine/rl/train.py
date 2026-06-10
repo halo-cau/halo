@@ -9,6 +9,7 @@ from stable_baselines3.common.callbacks import CheckpointCallback
 from stable_baselines3.common.callbacks import BaseCallback
 from sb3_contrib import MaskablePPO
 from sb3_contrib.common.wrappers import ActionMasker
+from engine.rl.policy import SpatialMaskablePolicy
 from datetime import datetime
 import os
 import gymnasium as gym
@@ -41,7 +42,7 @@ def mask_fn(env: gym.Env) -> np.ndarray:
 
 def make_env(rank):
     def _init():
-        env = DataCenterEnv(grid_size=50, rack_num=10)
+        env = DataCenterEnv(grid_size=50, rack_num=10, placement_mode="row")
         env.reset(seed=rank)
         env = ActionMasker(env, mask_fn)
         env = Monitor(env, filename=None)
@@ -103,12 +104,11 @@ def train():
         verbose=1,
     )
 
-    policy_kwargs = dict(
-        normalize_images=False,
-    )
-
+    # Spatial policy: resolution-preserving CNN + fully convolutional action head (engine/rl/policy.py).
+    # It wires the feature extractor, the identity MLP extractor, and normalize_images itself, so it
+    # needs no policy_kwargs.
     model = MaskablePPO(
-        "CnnPolicy",
+        SpatialMaskablePolicy,
         env=env,
         verbose=1,
         tensorboard_log=log_dir,
@@ -122,7 +122,6 @@ def train():
         clip_range=config["clip_range"],
         ent_coef=config["ent_coef"],
         target_kl=config["target_kl"],
-        policy_kwargs=policy_kwargs,
     )
 
     model.learn(

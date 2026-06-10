@@ -20,7 +20,7 @@ import {
   type SceneAshraeMetrics,
   T_MAX_REC,
 } from "./lib/ashrae";
-import { loadSavedJob } from "./lib/twinJob";
+import { latestScan, listScans, loadSavedJob } from "./lib/twinJob";
 
 // Design tokens (kept in lockstep with the CSS custom properties in dashboard.html)
 const C = {
@@ -729,6 +729,8 @@ function zoneFor(t: number): { zone: RackMetrics["zone"]; status: RackMetrics["s
 }
 
 interface ThermalResp {
+  compliant_racks: number;
+  temp_max_c: number;
   racks: { rack_index: number; intake_temp: number; exhaust_temp: number; delta_t: number }[];
   room: {
     rci_hi: number;
@@ -857,16 +859,90 @@ async function buildDetectedScene(
   return { scene, metrics };
 }
 
+// The dashboard shows a SAVED completed scan (from the registry), not the in-progress scan job, so a brand
+// new scan can run on the scan page while a previously scanned room is viewed and edited here. The picker
+// selects which saved room is shown; it defaults to the most recent, falling back to the legacy single job.
+let currentScanJob: string | null = latestScan()?.jobId ?? loadSavedJob()?.jobId ?? null;
+
+interface ServerRoom {
+  id: string;
+  n_racks: number;
+  precomputed: boolean;
+}
+
+// Populate the room picker from BOTH the browser's completed-scan registry AND the rooms that actually
+// exist on the server (GET /twin/runs). The browser registry is empty on a fresh browser or a teammate's
+// machine, so without the server fallback the picker is blank and every panel reports "no finished scan" --
+// which is exactly the "I don't see results" failure. Merging guarantees a selectable room, then the
+// detected room is rendered immediately so the dashboard opens on the real scan.
+async function populateScanPicker(): Promise<void> {
+  const sel = document.getElementById("scan-select") as HTMLSelectElement | null;
+  const editBtn = document.getElementById("open-editor-btn") as HTMLButtonElement | null;
+  if (!sel) return;
+
+  const local = listScans().map((s) => ({
+    id: s.jobId,
+    label: `${escapeHtml(s.name)}${s.kind === "images" ? " (멀티뷰)" : ""}`,
+  }));
+  let server: { id: string; label: string }[] = [];
+  try {
+    const r = await fetch("/api/v1/twin/runs").then((x) => (x.ok ? x.json() : { rooms: [] }));
+    server = ((r.rooms ?? []) as ServerRoom[]).map((rm) => ({
+      id: rm.id,
+      label: `${rm.id.slice(0, 8)} · ${rm.n_racks}랙${rm.precomputed ? " (기본)" : ""}`,
+    }));
+  } catch {
+    /* offline or no backend: fall back to the local registry only */
+  }
+
+  const seen = new Set<string>();
+  const merged: { id: string; label: string }[] = [];
+  for (const o of [...local, ...server]) {
+    if (!seen.has(o.id)) {
+      seen.add(o.id);
+      merged.push(o);
+    }
+  }
+  if (merged.length === 0) {
+    const j = loadSavedJob();
+    if (j) merged.push({ id: j.jobId, label: "스캔된 방" });
+  }
+  if (merged.length === 0) {
+    sel.style.display = "none";
+    if (editBtn) editBtn.disabled = true;
+    return;
+  }
+  sel.style.display = "";
+  if (editBtn) editBtn.disabled = false;
+  sel.innerHTML = merged.map((o) => `<option value="${o.id}">${o.label}</option>`).join("");
+  if (!currentScanJob || !merged.some((o) => o.id === currentScanJob)) {
+    currentScanJob = merged[0].id;
+  }
+  sel.value = currentScanJob;
+  void showDetectedRoom(); // render the selected room immediately so results are visible on load
+}
+
+document.getElementById("scan-select")?.addEventListener("change", (e) => {
+  currentScanJob = (e.target as HTMLSelectElement).value;
+  void showDetectedRoom();
+});
+
+// Open the SELECTED room in the editor in a NEW TAB, so editing one room and scanning a new one happen at
+// the same time (the editor reads that job's placements.json and posts restamps to that job alone).
+document.getElementById("open-editor-btn")?.addEventListener("click", () => {
+  if (!currentScanJob) return;
+  window.open(`./editor.html?job=${encodeURIComponent(currentScanJob)}`, "_blank");
+});
+
 async function showDetectedRoom(): Promise<void> {
   const out = document.getElementById("detected-thermal");
-  const saved = loadSavedJob();
-  if (!saved) {
+  if (!currentScanJob) {
     if (out) out.textContent = "스캔된 방이 없습니다 — 먼저 스캔을 완료하세요. (no finished scan)";
     return;
   }
   if (out) out.textContent = "스캔된 방의 열·ASHRAE 해석 중… (computing)";
   try {
-    const { scene, metrics } = await buildDetectedScene(saved.jobId);
+    const { scene, metrics } = await buildDetectedScene(currentScanJob);
     // Every panel is now driven by the scanned room's real /thermal metrics (ASHRAE + heat). The time
     // series is a daily projection anchored to the measured peak; savings shows the real current cost.
     renderStatusBar(scene, metrics);
@@ -888,6 +964,529 @@ document
   .getElementById("compute-thermal-btn")
   ?.addEventListener("click", () => void showDetectedRoom());
 
+// ---------- RL layout optimization: run the trained policy on the scanned room ----------
+// Posts the scanned job to POST /api/v1/twin/{id}/optimize, which feeds the twin to the MaskablePPO policy
+// (engine/rl via twin_bridge) and returns the layout it proposes plus that layout's own 3-D thermal score.
+// We render the proposed racks in the same BEV panels and a HONEST current-vs-RL comparison card.
+interface OptimizeResp {
+  n_racks: number;
+  rack_num: number;
+  total_energy: number;
+  ext: [number, number, number];
+  rack_type: string;
+  instances: {
+    name: string;
+    facing: string;
+    center: [number, number, number];
+    dims: [number, number, number];
+    intake_temp?: number;
+    exhaust_temp?: number;
+  }[];
+  fixed: {
+    name?: string;
+    vox_id?: number;
+    center: [number, number, number];
+    dims: [number, number, number];
+  }[];
+  thermal: {
+    compliant_racks: number;
+    temp_max_c: number;
+    racks: { rack_index: number; intake_temp: number; exhaust_temp: number; delta_t: number }[];
+    room: {
+      rci_hi: number;
+      rci_lo: number;
+      shi: number;
+      rhi: number;
+      mean_intake: number;
+      mean_exhaust: number;
+    };
+  } | null;
+}
+
+function buildOptimizedScene(r: OptimizeResp): { scene: SceneGraph; metrics: SceneAshraeMetrics } {
+  const depthY = r.ext[1];
+  detRackFacing.clear();
+  const furniture: Equipment[] = r.instances.map((p, i) => {
+    detRackFacing.set(`rack_${i}`, p.facing ?? "PLUS_Y");
+    return {
+      id: `rack_${i}`,
+      category: "server_rack",
+      label: p.name ?? `Rack ${i + 1}`,
+      position: [p.center[0], 0, depthY - p.center[1]] as [number, number, number],
+      rotation: [0, 0, 0] as [number, number, number],
+      size: [p.dims[0], p.dims[2], p.dims[1]] as [number, number, number],
+      color: "#37474F",
+      heatOutput: 5,
+      relations: [],
+    };
+  });
+  for (const [i, p] of r.fixed
+    .filter((p) => (p.name ?? "").startsWith("ac_unit") || p.vox_id === 3)
+    .entries()) {
+    furniture.push({
+      id: `ac_${i}`,
+      category: "cooling_unit",
+      label: "AC",
+      position: [p.center[0], 0, depthY - p.center[1]],
+      rotation: [0, 0, 0],
+      size: [p.dims[0], p.dims[2], p.dims[1]],
+      color: C.rackGray,
+      heatOutput: 0,
+      relations: [],
+    });
+  }
+  const net = r.fixed.find((p) => p.name === "network rack" || p.vox_id === 8);
+  if (net) {
+    furniture.push({
+      id: "netrack",
+      category: "network_rack",
+      label: "NET",
+      position: [net.center[0], 0, depthY - net.center[1]],
+      rotation: [0, 0, 0],
+      size: [net.dims[0], net.dims[2], net.dims[1]],
+      color: "#7C6FD6",
+      heatOutput: 0,
+      relations: [],
+    });
+  }
+  const scene: SceneGraph = {
+    id: "optimized",
+    name: "RL 최적화 배치 (제안)",
+    description: "RL-proposed layout",
+    room: { type: "scanned", dimensions: [r.ext[0], r.ext[2], r.ext[1]], openings: [] },
+    furniture,
+    score: { total: 0, thermal: 0, cooling: 0, cable: 0, proximity: 0, constraint: 0 },
+  };
+  const th = r.thermal;
+  const perRack: RackMetrics[] = (th?.racks ?? []).map((rk) => ({
+    id: `rack_${rk.rack_index}`,
+    label: `Rack ${rk.rack_index + 1}`,
+    intakeTemp: rk.intake_temp,
+    exhaustTemp: rk.exhaust_temp,
+    deltaT: rk.delta_t,
+    ...zoneFor(rk.intake_temp),
+    heatOutput: 5,
+  }));
+  const intakes = perRack.map((r) => r.intakeTemp);
+  const metrics: SceneAshraeMetrics = {
+    sceneId: "optimized",
+    sceneName: scene.name,
+    perRack,
+    rciHi: (th?.room.rci_hi ?? 100) / 100,
+    rciLo: (th?.room.rci_lo ?? 100) / 100,
+    shi: th?.room.shi ?? 0,
+    rhi: th?.room.rhi ?? 0,
+    meanIntake: th?.room.mean_intake ?? AMBIENT_T,
+    meanExhaust: th?.room.mean_exhaust ?? AMBIENT_T,
+    meanDeltaT: perRack.length ? perRack.reduce((s, r) => s + r.deltaT, 0) / perRack.length : 0,
+    peakIntake: intakes.length ? Math.max(...intakes) : AMBIENT_T,
+    totalHeatKw: perRack.reduce((s, r) => s + r.heatOutput, 0),
+    recommendedCount: perRack.filter((r) => r.zone === "recommended").length,
+    allowableCount: perRack.filter((r) => r.status === "warn").length,
+    violationCount: perRack.filter((r) => r.status === "danger").length,
+  };
+  return { scene, metrics };
+}
+
+// Honest current-vs-RL comparison written into the savings card (no fabricated "vs random" figure).
+function renderOptimizeComparison(cur: ThermalResp, r: OptimizeResp): void {
+  const host = document.getElementById("savings-card") as HTMLElement;
+  host.classList.remove("baseline");
+  const th = r.thermal;
+  if (!th) {
+    host.innerHTML = `<div class="savings-lbl">RL 제안 배치</div>
+      <div class="savings-val" style="color:${C.text1};">${r.n_racks}개 랙</div>
+      <div class="savings-sub">열 해석 없음 — 배치만 표시</div>`;
+    return;
+  }
+  // delta = RL - current; for compliance/RCI higher is better, for temps lower is better.
+  const row = (lbl: string, curV: string, rlV: string, better: boolean | null) => {
+    const col = better === null ? C.text2 : better ? C.successText : C.dangerText;
+    return `<div class="item"><div class="lbl">${lbl}</div>
+      <div class="v" style="font-size:13px;">${curV} <span style="color:${C.text3};">→</span>
+      <span style="color:${col};">${rlV}</span></div></div>`;
+  };
+  const curComp = cur.compliant_racks;
+  const rlComp = th.compliant_racks;
+  const curMax = cur.temp_max_c;
+  const rlMax = th.temp_max_c;
+  const improved = rlComp > curComp || (rlComp === curComp && rlMax < curMax - 0.05);
+  const headline = improved ? "RL 최적화 — 개선됨" : "RL 최적화 — 현재 배치가 이미 우수";
+  host.innerHTML = `
+    <div class="savings-lbl">${headline}</div>
+    <div class="savings-val" style="color:${improved ? C.successText : C.text1};font-size:18px;">
+      준수 ${curComp}/${r.n_racks} → ${rlComp}/${r.n_racks}</div>
+    <div class="savings-sub">현재 스캔 배치 대비 · RL 정책 추론 결과</div>
+    <hr/>
+    <div class="savings-grid">
+      ${row("RCI (高)", `${cur.room.rci_hi.toFixed(0)}%`, `${th.room.rci_hi.toFixed(0)}%`, th.room.rci_hi >= cur.room.rci_hi)}
+      ${row("평균 흡기", `${cur.room.mean_intake.toFixed(1)}°C`, `${th.room.mean_intake.toFixed(1)}°C`, th.room.mean_intake <= cur.room.mean_intake + 0.05)}
+      ${row("최고 온도", `${curMax.toFixed(1)}°C`, `${rlMax.toFixed(1)}°C`, rlMax <= curMax + 0.05)}
+      ${row("준수 랙", `${curComp}`, `${rlComp}`, rlComp >= curComp)}
+    </div>`;
+}
+
+async function showOptimizedRoom(): Promise<void> {
+  const out = document.getElementById("detected-thermal");
+  if (!currentScanJob) {
+    if (out) out.textContent = "스캔된 방이 없습니다 — 먼저 스캔을 완료하세요. (no finished scan)";
+    return;
+  }
+  const jobId = currentScanJob;
+  if (out) out.textContent = "RL 정책으로 배치 최적화 추론 중… (running RL inference)";
+  try {
+    // Run the policy AND fetch the current scanned layout's thermal in parallel so we can show before/after.
+    const [r, cur] = await Promise.all([
+      fetch(`/api/v1/twin/${jobId}/optimize`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      }).then((x) => {
+        if (!x.ok) throw new Error(`optimize ${x.status}`);
+        return x.json() as Promise<OptimizeResp>;
+      }),
+      fetch(`/api/v1/twin/${jobId}/thermal`)
+        .then((x) => (x.ok ? (x.json() as Promise<ThermalResp>) : null))
+        .catch(() => null),
+    ]);
+    const { scene, metrics } = buildOptimizedScene(r);
+    renderStatusBar(scene, metrics);
+    renderKpis(scene, metrics);
+    renderFloorPlan(scene, metrics);
+    renderComplianceSummary(scene, metrics);
+    renderTimeSeries(scene, metrics.peakIntake);
+    if (cur) renderOptimizeComparison(cur, r);
+    else renderSavings(scene, metrics);
+    if (out) {
+      const c = r.thermal
+        ? `준수 ${r.thermal.compliant_racks}/${r.n_racks} · RCI ${r.thermal.room.rci_hi.toFixed(0)}% · 최고흡기 ${metrics.peakIntake.toFixed(1)}°C`
+        : `${r.n_racks}개 랙 배치`;
+      out.textContent = `RL 최적화 추론 완료 — ${r.n_racks}개 랙 재배치 · ${c}`;
+    }
+  } catch (e) {
+    if (out) out.textContent = `오류: ${e instanceof Error ? e.message : String(e)}`;
+  }
+}
+document
+  .getElementById("rl-optimize-btn")
+  ?.addEventListener("click", () => void showOptimizedRoom());
+
+// ---------- Temporal (per-time-t) ASHRAE analysis ----------
+// Real steady-state physics, not a projection: POST /api/v1/twin/{id}/temporal runs the 3-D solver once per
+// discrete hour with the room default set to the OUTSIDE temperature at t, the AC fixed at 18 °C, and rack
+// power following the load at t; it returns the converged per-t metrics, which we plot over the day.
+interface TemporalSample {
+  t: number;
+  outside_c: number;
+  load: number;
+  rack_kw: number;
+  mean_intake: number;
+  max_intake: number;
+  mean_exhaust: number;
+  max_temp: number;
+  compliant_racks: number;
+  allowable_racks: number;
+  rci_hi: number;
+  mean_delta_t: number;
+}
+interface TemporalResp {
+  n_racks: number;
+  ac_supply_c: number;
+  base_rack_kw: number;
+  n_samples: number;
+  series: TemporalSample[];
+}
+
+function renderTemporalSeries(resp: TemporalResp): void {
+  const host = document.getElementById("ts-chart") as HTMLElement;
+  if (!host || resp.series.length === 0) return;
+  if (!tsChart) {
+    tsChart = echarts.init(host, undefined, { renderer: "svg" });
+    window.addEventListener("resize", () => tsChart?.resize());
+  }
+  const s = resp.series;
+  const n = resp.n_racks;
+  const hours = s.map((x) => x.t.toFixed(1));
+  const fontFamily =
+    '-apple-system, BlinkMacSystemFont, "Segoe UI", "Pretendard", system-ui, sans-serif';
+  const tMax = Math.ceil(Math.max(...s.map((x) => x.max_temp)) + 2);
+  const tMin = Math.floor(Math.min(...s.map((x) => Math.min(x.max_intake, x.outside_c))) - 2);
+  // Per-t compliance colour: green = all racks within recommended, amber = within allowable, red = violated.
+  const statusColor = (x: TemporalSample) =>
+    x.compliant_racks === n ? C.greenDeep : x.allowable_racks === n ? C.amber : C.red;
+  const compScatter = s.map((x, i) => ({
+    value: [hours[i], x.max_intake] as [string, number],
+    itemStyle: { color: statusColor(x) },
+  }));
+
+  tsChart.setOption(
+    {
+      animation: false,
+      backgroundColor: "transparent",
+      textStyle: { fontFamily, color: C.text2 },
+      grid: { left: 38, right: 40, top: 28, bottom: 32, containLabel: false },
+      tooltip: {
+        trigger: "axis",
+        backgroundColor: C.bgCard,
+        borderColor: C.border,
+        borderWidth: 0.5,
+        padding: [6, 10],
+        textStyle: { color: C.text1, fontSize: 11, fontFamily },
+        formatter: (params: unknown) => {
+          const arr = Array.isArray(params) ? params : [params];
+          const i = (arr[0] as { dataIndex: number }).dataIndex;
+          const x = s[i];
+          const tag =
+            x.compliant_racks === n ? "권장 준수" : x.allowable_racks === n ? "허용 범위" : "위반";
+          return (
+            `${x.t.toFixed(1)}시<br/>외기 ${x.outside_c.toFixed(1)}°C · 부하 ${(x.load * 100).toFixed(0)}% (${x.rack_kw.toFixed(1)}kW)<br/>` +
+            `흡입 최고 ${x.max_intake.toFixed(1)}°C · 최고온도 ${x.max_temp.toFixed(1)}°C<br/>` +
+            `준수 ${x.compliant_racks}/${n} · 허용 ${x.allowable_racks}/${n} · RCI ${x.rci_hi.toFixed(0)}% · ${tag}`
+          );
+        },
+      },
+      legend: {
+        data: ["부하", "외기", "흡입 최고", "최고 온도"],
+        right: 8,
+        top: 4,
+        textStyle: { color: C.text2, fontSize: 10, fontFamily },
+        itemWidth: 14,
+        itemHeight: 2,
+        itemGap: 10,
+        icon: "rect",
+      },
+      xAxis: {
+        type: "category",
+        data: hours,
+        axisLine: { lineStyle: { color: C.border, width: 0.5 } },
+        axisTick: { show: false },
+        axisLabel: {
+          color: C.text2,
+          fontSize: 9,
+          fontFamily,
+          formatter: (val: string) => `${parseFloat(val).toFixed(0)}시`,
+        },
+      },
+      yAxis: [
+        {
+          type: "value",
+          name: "°C",
+          nameTextStyle: { color: C.text2, fontSize: 9, fontFamily, padding: [0, 0, 4, 0] },
+          min: tMin,
+          max: tMax,
+          axisLine: { show: false },
+          axisTick: { show: false },
+          splitLine: { lineStyle: { color: C.border, width: 0.5, type: "dashed" } },
+          axisLabel: { color: C.text2, fontSize: 8, fontFamily },
+        },
+        {
+          type: "value",
+          name: "외기 °C",
+          nameTextStyle: { color: C.warnText, fontSize: 9, fontFamily, padding: [0, 0, 4, 0] },
+          min: tMin,
+          max: tMax,
+          axisLine: { show: false },
+          axisTick: { show: false },
+          splitLine: { show: false },
+          axisLabel: { color: C.warnText, fontSize: 8, fontFamily },
+        },
+        { type: "value", show: false, min: 0, max: 1 },
+      ],
+      series: [
+        {
+          name: "부하",
+          type: "bar",
+          yAxisIndex: 2,
+          data: s.map((x) => x.load),
+          barCategoryGap: "55%",
+          itemStyle: { color: C.blueCool, opacity: 0.15 },
+          z: 1,
+        },
+        {
+          name: "외기",
+          type: "line",
+          yAxisIndex: 1,
+          data: s.map((x) => x.outside_c),
+          showSymbol: false,
+          smooth: 0.2,
+          lineStyle: { color: C.amber, width: 1.2, opacity: 0.85 },
+          z: 2,
+        },
+        {
+          name: "최고 온도",
+          type: "line",
+          yAxisIndex: 0,
+          data: s.map((x) => x.max_temp),
+          showSymbol: false,
+          smooth: 0.2,
+          lineStyle: { color: C.red, width: 1, type: "dashed", opacity: 0.65 },
+          z: 2,
+        },
+        {
+          name: "흡입 최고",
+          type: "line",
+          yAxisIndex: 0,
+          data: s.map((x) => x.max_intake),
+          showSymbol: false,
+          smooth: 0.2,
+          lineStyle: { color: C.greenDeep, width: 1.6 },
+          markLine: {
+            silent: true,
+            symbol: "none",
+            lineStyle: { color: C.red, type: "dashed", width: 0.6, opacity: 0.6 },
+            data: [
+              {
+                yAxis: T_MAX_REC,
+                label: {
+                  formatter: `권장 상한 ${T_MAX_REC}°C`,
+                  color: C.dangerText,
+                  fontSize: 7,
+                  fontFamily,
+                  position: "insideEndTop",
+                },
+              },
+              {
+                yAxis: 18,
+                label: {
+                  formatter: "권장 하한 18°C",
+                  color: C.infoText,
+                  fontSize: 7,
+                  fontFamily,
+                  position: "insideEndBottom",
+                },
+              },
+            ],
+          },
+          z: 3,
+        },
+        {
+          name: "준수상태",
+          type: "scatter",
+          yAxisIndex: 0,
+          data: compScatter,
+          symbolSize: 7,
+          tooltip: { show: false },
+          z: 4,
+        },
+      ],
+    },
+    true,
+  );
+  tsChart.resize();
+}
+
+async function runTemporalAnalysis(): Promise<void> {
+  const out = document.getElementById("detected-thermal");
+  if (!currentScanJob) {
+    if (out) out.textContent = "스캔된 방이 없습니다 — 먼저 스캔을 완료하세요. (no finished scan)";
+    return;
+  }
+  if (out) out.textContent = "시간대별 정상상태 열 해석 중… 각 시각마다 3D 솔버 수렴 (수 초 소요)";
+  try {
+    const resp = await fetch(`/api/v1/twin/${currentScanJob}/temporal`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    }).then((x) => {
+      if (!x.ok) throw new Error(`temporal ${x.status}`);
+      return x.json() as Promise<TemporalResp>;
+    });
+    renderTemporalSeries(resp);
+    const s = resp.series;
+    const okHours = s
+      .filter((x) => x.compliant_racks === resp.n_racks)
+      .map((x) => `${x.t.toFixed(0)}시`);
+    const worst = s.reduce((a, b) => (b.rci_hi < a.rci_hi ? b : a), s[0]);
+    if (out) {
+      out.textContent =
+        `시간대별 분석 완료 — AC ${resp.ac_supply_c}°C 고정 · ${resp.n_samples}개 시각 정상상태 해석 · ` +
+        `권장 준수 시간대 ${okHours.length ? okHours.join(", ") : "없음"} · ` +
+        `최악 ${worst.t.toFixed(0)}시 (외기 ${worst.outside_c.toFixed(0)}°C, RCI ${worst.rci_hi.toFixed(0)}%)`;
+    }
+  } catch (e) {
+    if (out) out.textContent = `오류: ${e instanceof Error ? e.message : String(e)}`;
+  }
+}
+document
+  .getElementById("temporal-btn")
+  ?.addEventListener("click", () => void runTemporalAnalysis());
+
+// ---------- Containment comparison: designed (hot/cold aisle) vs non-contained baseline ----------
+// POST /api/v1/twin/{id}/compare scores the same room + AC + racks twice -- the designed layout and the
+// same racks all facing one way (recirculation) -- so the delta is the cooling benefit of containment.
+interface CompareMetrics {
+  compliant: number;
+  rci_hi: number;
+  rci_lo: number;
+  shi: number;
+  rhi: number;
+  mean_intake: number;
+  max_intake: number;
+  mean_exhaust: number;
+  max_temp: number;
+  mean_delta_t: number;
+}
+interface CompareResp {
+  n_racks: number;
+  designed: CompareMetrics;
+  baseline: CompareMetrics;
+}
+
+function renderContainmentComparison(r: CompareResp): void {
+  const host = document.getElementById("savings-card") as HTMLElement;
+  host.classList.remove("baseline");
+  const n = r.n_racks;
+  const d = r.designed;
+  const b = r.baseline;
+  // Each row: label, designed value, baseline value, and whether the design is better (green) or not.
+  const row = (lbl: string, dv: string, bv: string, better: boolean | null) => {
+    const col = better === null ? C.text2 : better ? C.successText : C.dangerText;
+    return `<div class="item"><div class="lbl">${lbl}</div>
+      <div class="v" style="font-size:13px;"><span style="color:${col};font-weight:600;">${dv}</span>
+      <span style="color:${C.text3};">vs</span> ${bv}</div></div>`;
+  };
+  host.innerHTML = `
+    <div class="savings-lbl">냉각 격리 효과 (설계 vs 비격리 기준선)</div>
+    <div class="savings-val" style="color:${C.successText};font-size:18px;">
+      준수 ${d.compliant}/${n} <span style="color:${C.text3};font-size:13px;">vs</span> ${b.compliant}/${n}</div>
+    <div class="savings-sub">동일 방·동일 AC·동일 랙 — 통로 격리만 차이 (핫/콜드 아일 vs 재순환)</div>
+    <hr/>
+    <div class="savings-grid">
+      ${row("RCI (高)", `${d.rci_hi.toFixed(0)}%`, `${b.rci_hi.toFixed(0)}%`, d.rci_hi >= b.rci_hi)}
+      ${row("평균 흡기", `${d.mean_intake.toFixed(1)}°C`, `${b.mean_intake.toFixed(1)}°C`, d.mean_intake <= b.mean_intake)}
+      ${row("최고 흡기", `${d.max_intake.toFixed(1)}°C`, `${b.max_intake.toFixed(1)}°C`, d.max_intake <= b.max_intake)}
+      ${row("SHI (低우수)", `${d.shi.toFixed(2)}`, `${b.shi.toFixed(2)}`, d.shi <= b.shi)}
+    </div>`;
+}
+
+async function runContainmentComparison(): Promise<void> {
+  const out = document.getElementById("detected-thermal");
+  if (!currentScanJob) {
+    if (out) out.textContent = "스캔된 방이 없습니다 — 먼저 스캔을 완료하세요. (no finished scan)";
+    return;
+  }
+  if (out) out.textContent = "격리 효과 비교 계산 중… 설계/기준선 두 배치 정상상태 해석";
+  try {
+    const r = await fetch(`/api/v1/twin/${currentScanJob}/compare`, { method: "POST" }).then(
+      (x) => {
+        if (!x.ok) throw new Error(`compare ${x.status}`);
+        return x.json() as Promise<CompareResp>;
+      },
+    );
+    renderContainmentComparison(r);
+    if (out) {
+      out.textContent =
+        `격리 효과 — 설계 준수 ${r.designed.compliant}/${r.n_racks} (RCI ${r.designed.rci_hi.toFixed(0)}%) · ` +
+        `비격리 기준선 ${r.baseline.compliant}/${r.n_racks} (RCI ${r.baseline.rci_hi.toFixed(0)}%)`;
+    }
+  } catch (e) {
+    if (out) out.textContent = `오류: ${e instanceof Error ? e.message : String(e)}`;
+  }
+}
+document
+  .getElementById("compare-btn")
+  ?.addEventListener("click", () => void runContainmentComparison());
+
 // ---------- Top-level render ----------
 function render() {
   const scene = dashboardScenes[currentSceneIdx];
@@ -903,3 +1502,4 @@ function render() {
 }
 
 render();
+void populateScanPicker();

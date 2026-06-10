@@ -5,7 +5,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { PLYLoader } from "three/addons/loaders/PLYLoader.js";
-import { clearJob, loadSavedJob, saveJob, type TwinStatus } from "./lib/twinJob";
+import { addScan, clearJob, loadSavedJob, saveJob, type TwinStatus } from "./lib/twinJob";
 
 // ── DOM refs ──────────────────────────────────────────────
 const canvas = document.getElementById("viewer") as HTMLCanvasElement;
@@ -815,9 +815,21 @@ async function pollJob(jobId: string): Promise<void> {
     setProgress(100, "done");
     mode = "twin";
     twinJob = { id: jobId, outputs: s.outputs ?? {} };
-    setStatus("done — showing the voxel twin", false);
     enableTwinTabs();
     setActiveStage("voxel");
+
+    // Persist the finished twin into the completed-scans registry so it is never lost, then RESET the scan
+    // page so a new room can be scanned right away. The completed twin stays on screen for review here; the
+    // dashboard reads the saved registry (not the now-cleared active job), so opening this room in the
+    // editor and scanning a new room can happen at the same time. clearJob() also stops the progress badge.
+    const kind = loadSavedJob()?.kind ?? "images";
+    addScan({ jobId, kind, name: new Date().toLocaleString(), completedAt: Date.now() });
+    clearJob();
+    fileInput.value = "";
+    setStatus(
+      "done — twin saved. Drop a new room's images to scan again, or open this room in the dashboard / editor.",
+      false,
+    );
   } finally {
     polling = false;
     uploadBtn.disabled = false;

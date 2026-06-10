@@ -1,3 +1,4 @@
+import os
 import sys
 import numpy as np
 from engine.rl.datacenter import DataCenterEnv
@@ -6,9 +7,14 @@ from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 import threading
 from backend.app.schemas.datacenter import OptimizeResponse
 
+# Placement mode for the SERVING env. The shipped model.zip was trained with one-rack-per-step ("single"),
+# so that is the default to keep its output meaningful. After training a row-placement policy
+# (engine/rl/train.py uses placement_mode="row"), set HALO_RL_PLACEMENT_MODE=row so serving matches it.
+PLACEMENT_MODE = os.environ.get("HALO_RL_PLACEMENT_MODE", "single").strip() or "single"
+
 
 def make_env():
-    return DataCenterEnv()
+    return DataCenterEnv(placement_mode=PLACEMENT_MODE)
 
 
 class RLService:
@@ -68,8 +74,17 @@ class RLService:
             return {
                 "total_energy": float(total_energy),
                 "max_temp": max_temp,
-                "data": self._decode(actions),
+                # Decode from the env's final rack_map/rack_dir, not the action list: one action may place a
+                # whole row, so the placed racks are the ground truth regardless of placement mode.
+                "data": self._decode_from_grid(raw_env),
             }
+
+    def _decode_from_grid(self, env):
+        """Read every placed rack from the environment's rack_map / rack_dir (mode-agnostic)."""
+        result = []
+        for gx, gy in np.argwhere(env.rack_map == 1):
+            result.append({"x": int(gx), "y": int(gy), "dir": int(env.rack_dir[gx, gy])})
+        return result
 
     def _decode(self, actions):
         result = []

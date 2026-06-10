@@ -244,8 +244,13 @@
 
       <!-- Detected-room thermal: runs the real 3D engine on the scanned twin's voxel_grid (GET
            /api/v1/twin/{id}/thermal) and shows its ASHRAE score. Wired in dashboard.ts. -->
-      <div class="detected-thermal-bar" style="display:flex;align-items:center;gap:12px;margin:8px 0;">
+      <div class="detected-thermal-bar" style="display:flex;align-items:center;gap:12px;margin:8px 0;flex-wrap:wrap;">
+        <select id="scan-select" class="scene-btn" style="padding:6px 10px;" title="스캔된 방 선택"></select>
         <button type="button" id="compute-thermal-btn" class="scene-btn">스캔한 방의 열·ASHRAE 계산</button>
+        <button type="button" id="compare-btn" class="scene-btn">냉각 격리 효과 비교</button>
+        <button type="button" id="temporal-btn" class="scene-btn">시간대별 ASHRAE 분석</button>
+        <button type="button" id="rl-optimize-btn" class="scene-btn">RL 배치 최적화 실행</button>
+        <button type="button" id="open-editor-btn" class="scene-btn">에디터에서 편집 (새 탭)</button>
         <span id="detected-thermal" style="font-size:12px;color:var(--text-2);"></span>
       </div>
 
