@@ -815,12 +815,7 @@ async function pollJob(jobId: string): Promise<void> {
     setProgress(100, "done");
     mode = "twin";
     twinJob = { id: jobId, outputs: s.outputs ?? {} };
-    setStatus(
-      s.precomputed
-        ? "사전 계산된 샘플 — Pi3+SAM3 결과 사전 실행 (precomputed sample)"
-        : "done — showing the voxel twin",
-      false,
-    );
+    setStatus("done — showing the voxel twin", false);
     enableTwinTabs();
     setActiveStage("voxel");
   } finally {
