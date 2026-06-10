@@ -1,0 +1,55 @@
+{
+  "backend": "sam3_photo_class",
+  "label_counts": {
+    "unknown": 630362,
+    "server rack": 358680,
+    "ups": 45341,
+    "ac_unit": 21480,
+    "trash can": 17710,
+    "cardboard box": 14688,
+    "chair": 6532,
+    "fire hose": 2221
+  },
+  "palette": {
+    "ac_unit": [
+      0.31,
+      0.503,
+      0.97
+    ],
+    "cardboard box": [
+      0.97,
+      0.31,
+      0.888
+    ],
+    "chair": [
+      0.31,
+      0.97,
+      0.86
+    ],
+    "fire hose": [
+      0.97,
+      0.667,
+      0.31
+    ],
+    "server rack": [
+      0.475,
+      0.31,
+      0.97
+    ],
+    "trash can": [
+      0.338,
+      0.97,
+      0.31
+    ],
+    "unknown": [
+      0.3,
+      0.3,
+      0.33
+    ],
+    "ups": [
+      0.97,
+      0.31,
+      0.531
+    ]
+  }
+}

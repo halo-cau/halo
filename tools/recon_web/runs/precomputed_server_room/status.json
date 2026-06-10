@@ -1,0 +1,38 @@
+{
+  "state": "done",
+  "step": "done",
+  "pct": 100,
+  "message": "precomputed sample",
+  "outputs": {
+    "recon": "recon.ply",
+    "labeled": "labeled.ply",
+    "legend": "labeled.legend.json",
+    "classes": "labeled_class.ply",
+    "voxel": "voxel.ply",
+    "manifest": "placements.json"
+  },
+  "label_counts": {
+    "wall": 306221,
+    "ceiling": 179003,
+    "floor": 145138,
+    "unknown": 110062,
+    "server rack 7": 70025,
+    "server rack 1": 65650,
+    "server rack 3": 33083,
+    "server rack 6": 29339,
+    "server rack 8": 25714,
+    "server rack 12": 23354,
+    "server rack 2": 23041,
+    "ac_unit 1": 21480,
+    "server rack 5": 19911,
+    "server rack 11": 19299,
+    "server rack 10": 16668,
+    "server rack 4": 16391,
+    "server rack 9": 16205,
+    "cardboard box 1": 14688,
+    "trash can 1": 13357,
+    "chair 1": 6532,
+    "trash can 2": 4353,
+    "fire hose 1": 2221
+  }
+}

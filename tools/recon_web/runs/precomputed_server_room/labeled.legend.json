@@ -1,0 +1,140 @@
+{
+  "backend": "sam3_photo",
+  "label_counts": {
+    "wall": 306221,
+    "ceiling": 179003,
+    "floor": 145138,
+    "unknown": 110062,
+    "server rack 7": 70025,
+    "server rack 1": 65650,
+    "server rack 3": 33083,
+    "server rack 6": 29339,
+    "server rack 8": 25714,
+    "server rack 12": 23354,
+    "server rack 2": 23041,
+    "ac_unit 1": 21480,
+    "server rack 5": 19911,
+    "server rack 11": 19299,
+    "server rack 10": 16668,
+    "server rack 4": 16391,
+    "server rack 9": 16205,
+    "cardboard box 1": 14688,
+    "trash can 1": 13357,
+    "chair 1": 6532,
+    "trash can 2": 4353,
+    "fire hose 1": 2221
+  },
+  "palette": {
+    "ac_unit 1": [
+      0.31,
+      0.503,
+      0.97
+    ],
+    "cardboard box 1": [
+      0.695,
+      0.97,
+      0.31
+    ],
+    "chair 1": [
+      0.97,
+      0.31,
+      0.888
+    ],
+    "fire hose 1": [
+      0.31,
+      0.97,
+      0.86
+    ],
+    "trash can 1": [
+      0.31,
+      0.944,
+      0.97
+    ],
+    "trash can 2": [
+      0.97,
+      0.804,
+      0.31
+    ],
+    "floor": [
+      1.0,
+      0.55,
+      0.05
+    ],
+    "ceiling": [
+      0.97,
+      0.86,
+      0.1
+    ],
+    "wall": [
+      0.15,
+      0.55,
+      1.0
+    ],
+    "unknown": [
+      0.3,
+      0.3,
+      0.33
+    ],
+    "server rack 1": [
+      0.04,
+      0.262,
+      0.8
+    ],
+    "server rack 2": [
+      0.484,
+      0.8,
+      0.04
+    ],
+    "server rack 3": [
+      0.8,
+      0.04,
+      0.705
+    ],
+    "server rack 4": [
+      0.04,
+      0.8,
+      0.673
+    ],
+    "server rack 5": [
+      0.8,
+      0.451,
+      0.04
+    ],
+    "server rack 6": [
+      0.229,
+      0.04,
+      0.8
+    ],
+    "server rack 7": [
+      0.072,
+      0.8,
+      0.04
+    ],
+    "server rack 8": [
+      0.8,
+      0.04,
+      0.294
+    ],
+    "server rack 9": [
+      0.04,
+      0.516,
+      0.8
+    ],
+    "server rack 10": [
+      0.738,
+      0.8,
+      0.04
+    ],
+    "server rack 11": [
+      0.641,
+      0.04,
+      0.8
+    ],
+    "server rack 12": [
+      0.04,
+      0.8,
+      0.419
+    ]
+  },
+  "n_instances": 20
+}
