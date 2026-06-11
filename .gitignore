@@ -80,3 +80,6 @@ tools/recon_web/
 data/server_room_*/
 data/sonata_las6/
 .gstack/
+
+# Private: shared GPU-server migration runbook (host/account/SSH details). Kept local only.
+scripts/migrate/SERVER.md
