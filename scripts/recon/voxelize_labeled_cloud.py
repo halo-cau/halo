@@ -23,9 +23,9 @@ the most general (no room knowledge supplied):
     ``_fit_axis_scales`` (per-axis scale), then the detected-wall room shell. No room dimensions are given,
     so this path applies to ANY scanned room.
   * FALLBACK (prior-pinned) -- ``--scale-anchor room``. Only for captures too degraded for the main path:
-    pin the scale and shell to a SUPPLIED ``--room-dims`` spec (``_fit_room_box_scale``). Room-specific.
-  * FALLBACK, LAST RESORT -- ``--reference``. Only to reproduce one already-validated room verbatim: the
-    CV merely registers the room, then a KNOWN layout is stamped. Does not generalise.
+    pin the scale and shell to a SUPPLIED ``--room-dims`` spec (``_fit_room_box_scale``).
+  * FALLBACK -- ``--reference``. The CV registers the room, then instances from a supplied placements
+    file are stamped instead of being derived from the cloud.
 
 Usage (halo env):
     python scripts/recon/voxelize_labeled_cloud.py --run tools/recon_web/runs/pi3_chest32_final
@@ -198,8 +198,8 @@ def _fit_room_box_scale(pt_base, P, room_dims):
     """FALLBACK (prior-pinned; degraded captures only) -- scale-anchor=room, OFF by default.
 
     Per-axis metre-per-unit from a SUPPLIED room-dimension spec, in the rows->+X frame. Used only when the
-    MAIN PATH CV recovery (_fit_axis_scales) is unreliable on a degraded capture; it trades generality for
-    a pinned scale, so it is room-specific, not a general solution.
+    MAIN PATH CV recovery (_fit_axis_scales) is unreliable on a degraded capture; it relies on the supplied
+    dimensions instead of recovering the scale from the cloud.
 
     ``room_dims`` (= length X, depth Y, height Z) is treated as known, so the room box -- not the noisy,
     occluded racks -- is the ruler:
@@ -300,8 +300,8 @@ def voxelize_labeled(run, *, rack_type="42U_real", y0_pad=0.0, face_depth=70,
     ``metric=True`` skips the scale anchor for inputs already in metres (LAS/LAZ). MAIN PATH (the default)
     ``scale_anchor="rack"`` recovers the scale + room from the CV alone (the rack cuboid + the detected
     walls), so it generalises to any room. The ``scale_anchor="room"`` FALLBACK pins the scale to a supplied
-    ``room_dims`` spec only when the CV is too degraded; ``reference`` is the last-resort fallback that
-    stamps one known room verbatim."""
+    ``room_dims`` spec only when the CV is too degraded; ``reference`` is a last-resort fallback that places
+    instances from a supplied layout file."""
     return _voxelize(argparse.Namespace(run=Path(run), rack_type=rack_type, y0_pad=y0_pad,
                                         face_depth=face_depth, aisle=aisle, room_depth=room_depth,
                                         metric=metric, racks_per_row=racks_per_row, ups_at=ups_at,
@@ -492,11 +492,10 @@ def _voxelize(args):
         print(f"room (fit to detected walls): {ext[0]:.2f} x {ext[1]:.2f} x {ext[2]:.2f} m -> grid {shape}")
     grid = _build_layout_grid(shape, np.int8)
 
-    # --reference: LAST-RESORT FALLBACK (off by default). The MAIN PATH is the CV layout recovery below
-    # (steps 4a-4f); this branch is taken ONLY when a known target room must be reproduced verbatim. The
-    # cloud still REGISTERS the room (pose + per-axis scale above), but the racks/AC/UPS/cabinets are
-    # stamped from the KNOWN <reference>/placements.json rather than derived. The room is logged so a
-    # mismatch shows. Generalises to nothing -- it is the explicit escape hatch for one validated room.
+    # --reference: optional fallback (off by default). The MAIN PATH is the CV layout recovery below
+    # (steps 4a-4f); this branch is taken only when a placements file is supplied. The cloud still
+    # REGISTERS the room (pose + per-axis scale above), but the racks/AC/UPS/cabinets are stamped from the
+    # supplied <reference>/placements.json rather than derived. The room is logged so a mismatch shows.
     if getattr(args, "reference", None):
         ref = json.loads((Path(args.reference) / "placements.json").read_text())
         reg = tuple(round(float(e), 2) for e in ext)
@@ -528,9 +527,8 @@ def _voxelize(args):
         return wall
 
     # 4. MAIN PATH (generalising CV) -- DERIVE the layout from the labeled cloud (steps 4a-4f). Every
-    #    instance below comes from the cloud's own points; no room-specific layout is supplied. (The
-    #    --reference last-resort fallback above replaces this whole block when one validated room must be
-    #    reproduced verbatim.)
+    #    instance below comes from the cloud's own points. (The ``--reference`` fallback above replaces this
+    #    whole block when a layout file is supplied instead.)
     # 4a. racks: cluster into 2 rows (now along X -> differ in Y), snap each row to ONE line,
     #     face the cold aisle (toward the other row); body extrudes the prior depth toward the wall.
     rack_names = [n for n in np.unique(pt_name)
@@ -785,9 +783,8 @@ def main() -> int:
                     help="unbend a warped recon using the ceiling outline as straightening rails before "
                          "scaling (rows -> +X). --no-rectify to disable. Skipped for --metric inputs")
     ap.add_argument("--reference", type=Path, default=None,
-                    help="LAST-RESORT fallback: a run dir whose placements.json is a KNOWN target layout. "
-                         "Bypasses CV layout recovery -- the cloud only registers the room, the known "
-                         "layout is stamped verbatim. For reproducing one validated room, not generalising")
+                    help="Fallback: a run dir whose placements.json supplies the layout. Bypasses CV layout "
+                         "recovery -- the cloud registers the room and the supplied layout is stamped")
     _voxelize(ap.parse_args())
     return 0
 

@@ -79,7 +79,7 @@ if want mask3d && have_env halo; then
     ) > "${OUT}/mask3d_train.log" 2>&1
   rc=$?; { [[ $rc -eq 0 || $rc -eq 2 ]] && note "PASS mask3d_train (rc=${rc})"; } || note "FAIL mask3d_train rc=${rc}"
   checkfile mask3d_ckpt "${SAVE}/last-epoch.ckpt"
-  CKPT="${SAVE}/last-epoch.ckpt"; [[ -s "$CKPT" ]] || CKPT="${REPO}/opt/Mask3D/checkpoints/halo_overfit_v4/last-epoch.ckpt"
+  CKPT="${SAVE}/last-epoch.ckpt"; [[ -s "$CKPT" ]] || CKPT="${REPO}/opt/Mask3D/checkpoints/halo_finetune_v4/last-epoch.ckpt"
   run mask3d_predict halo conda run -n halo python "${REPO}/scripts/predict_halo.py" \
       --checkpoint "$CKPT" --input "$MASK3D_INPUT" --output "${OUT}/mask3d_pred.ply" \
       --confidence-threshold 0.1 --mask-threshold 0.5

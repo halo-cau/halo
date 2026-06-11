@@ -23,7 +23,7 @@ index 9d153b3..a5f813e 100644
  
 +    if dataset_name == 'halo':
 +        # HALO 6-class server-room schema (wall/floor/ceiling/server_rack/
-+        # box_clutter/ac_unit). Finetuned from a single overfit scene.
++        # box_clutter/ac_unit). Finetuned on the labeled scan.
 +        cfg.general.num_targets = 7              # 6 classes + 1 "no-object"
 +        cfg.general.train_mode = False
 +        cfg.general.eval_on_segments = False

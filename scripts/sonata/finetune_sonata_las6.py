@@ -1,10 +1,10 @@
 """Finetune a linear seg head on the frozen Sonata PTv3 encoder, on las6_corrected.
 
 Default = LINEAR PROBE (encoder frozen): the most data-efficient, lowest-memory
-option, and the right call for a single labeled scan — it tests whether Sonata's
+option, and the right call for a small labeled set — it tests whether Sonata's
 features linearly separate wall/floor/ceiling/server_rack/box_clutter/ac_unit.
-``--mode full`` unfreezes the encoder (more capacity, more overfit risk on 1
-scene; needs more VRAM — lower --crop/--patch if it OOMs on 8 GB).
+``--mode full`` unfreezes the encoder (more capacity, but needs more training
+data and VRAM — lower --crop/--patch if it OOMs on 8 GB).
 
 Run in the `sonata` env:
     conda run -n sonata python scripts/sonata/finetune_sonata_las6.py

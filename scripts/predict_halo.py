@@ -10,7 +10,7 @@ colors them by the HALO 6-class palette.
 Usage::
 
     python scripts/predict_halo.py \\
-        --checkpoint opt/Mask3D/checkpoints/halo_overfit_v1/last-epoch.ckpt \\
+        --checkpoint opt/Mask3D/checkpoints/halo_finetune_v1/last-epoch.ckpt \\
         --input server_room_phone/pipeline_vis_lidar_laz/s3_manhattan.ply \\
         --output server_room_phone/pipeline_vis_lidar_laz/s3_halo_pred.ply \\
         --confidence-threshold 0.5
@@ -70,7 +70,7 @@ def predict(
 
     # The cvg fork's get_model dispatches on the FIRST underscore-separated
     # token of the checkpoint filename, so a name like
-    # ``halo_overfit_v1.ckpt`` selects our halo branch (num_targets=7 etc.).
+    # ``halo_finetune_v1.ckpt`` selects our halo branch (num_targets=7 etc.).
     halo_ckpt = _ensure_halo_named_checkpoint(checkpoint)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Loading model with halo branch from {halo_ckpt}")

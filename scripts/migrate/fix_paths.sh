@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ---------------------------------------------------------------------------
-# fix_paths.sh — rewrite hard-coded /home/ppco915 paths to the server's repo.
+# fix_paths.sh — rewrite absolute /home/ppco915 paths to the server's repo.
 #
 # Replaces the (forbidden) symlink approach: stays ENTIRELY inside the account,
 # no sudo, nothing created outside $HOME. Run ON THE SERVER after git clone +

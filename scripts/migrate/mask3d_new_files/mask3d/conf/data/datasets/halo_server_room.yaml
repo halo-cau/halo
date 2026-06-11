@@ -1,8 +1,7 @@
 # @package data
 # HALO 6-class server-room dataset (wall/floor/ceiling/server_rack/box_clutter/ac_unit).
 # All three split dataset configs read from data/mask3d_server_room/Validation_database.yaml
-# because the semseg loader hardcodes mode='Validation' before reading the yaml.
-# For an overfit-to-room demo, train and val seeing the same scene is intentional.
+# because the semseg loader fixes mode to 'Validation' before reading the yaml.
 
 train_dataset:
   _target_: mask3d.datasets.semseg.SemanticSegmentationDataset

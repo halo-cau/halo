@@ -6,8 +6,8 @@ instance]. Sonata's PTv3 expects a dict with **real normals** (its input feat is
 coord+color+normal, 9-ch) — the npy's normal columns are all zero, so we compute
 them here with Open3D. We remap the 1-based semantic ids to a contiguous
 0..K-1 head label space (ignore=255 → -1) and add a class-stratified train/val
-split (single scene → the split measures feature separability, not spatial
-generalization; the real test is a held-out scan / the MVS cloud).
+split (the split measures feature separability; the spatial test is a held-out
+scan / the MVS cloud).
 
 Run in the `halo` env (numpy + open3d). Output: data/sonata_las6/las6.npz + meta.
 """

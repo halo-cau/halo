@@ -3,7 +3,7 @@
 Native-3D semantic segmentation that emits the required vocab — **wall, floor,
 ceiling, server_rack, box_clutter, ac_unit** — by finetuning a tiny linear head
 on the frozen, self-supervised **Sonata / Point Transformer V3** encoder. Chosen
-because it's the most data-efficient option for our single labeled scan and runs
+because it's the most data-efficient option for a small labeled set and runs
 on 8 GB. No 2D rendering / backprojection anywhere.
 
 ## Pipeline
@@ -25,7 +25,7 @@ on 8 GB. No 2D rendering / backprojection anywhere.
    ```
 
 ## Knobs (8 GB)
-- `--mode linear` (default, encoder frozen, lowest VRAM) vs `--mode full` (unfreeze; more VRAM/overfit risk).
+- `--mode linear` (default, encoder frozen, lowest VRAM) vs `--mode full` (unfreeze; more VRAM, needs more data).
 - If CUDA OOM: lower `--crop 60000` and/or `--patch 512` (or `256`). Patch only changes attention grouping, not weights.
 - `--enable-flash` only if you later install FlashAttention (not required).
 
