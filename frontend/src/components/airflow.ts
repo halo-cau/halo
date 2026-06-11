@@ -6,6 +6,16 @@ const TRAIL_LENGTH = 40;
 const SEGMENT_COUNT = STREAMLINE_COUNT * (TRAIL_LENGTH - 1);
 const VERTEX_COUNT = SEGMENT_COUNT * 2;
 
+// Per-source streamline speed caps, derived from REAL airflow so the AC power jet and the rack exhaust
+// read at their true relative speeds. Measured ranges (provided by the team): a floor-standing AC in
+// power mode discharges 6–8 m/s; a server-rack exhaust reads 1.5–4.5 m/s; room recirculation drifts
+// ~1 m/s. Pick a representative speed inside each range and convert with one calibration constant — so
+// these caps stay honestly tied to m/s and are trivial to retune to new measurements.
+const MPS_TO_VIZ = 0.012; // viz units (per frame) per 1 m/s of real airflow
+const SPEED_AC = 7.5 * MPS_TO_VIZ; // 0.090 — floor-standing AC, power mode (6–8 m/s)
+const SPEED_RACK = 3.75 * MPS_TO_VIZ; // 0.045 — server-rack exhaust (1.5–4.5 m/s)
+const SPEED_AMBIENT = 1.0 * MPS_TO_VIZ; // 0.012 — room recirculation / drift
+
 interface HeatSource {
   x: number;
   z: number;
@@ -15,6 +25,69 @@ interface HeatSource {
   frontZ: number;
   backX: number;
   backZ: number;
+}
+
+// A cooling unit resolved into its discharge geometry. `n` is the front-face normal (the direction the
+// unit discharges), `t` is the in-face width axis (along the vent). `ceiling` true = cassette that blows
+// down in four directions; false = floor-standing unit that blows out of its upper-front louver vent.
+interface CoolSource {
+  x: number;
+  z: number;
+  y0: number; // base height (position.y)
+  w: number;
+  h: number;
+  d: number;
+  nX: number;
+  nZ: number;
+  tX: number;
+  tZ: number;
+  ceiling: boolean;
+}
+
+function isCoolingUnit(f: Equipment): boolean {
+  return f.category === "cooling_unit" || f.category === "stand_ac" || f.category === "ceiling_ac";
+}
+
+function makeCoolSources(sceneData: SceneGraph): CoolSource[] {
+  return sceneData.furniture.filter(isCoolingUnit).map((f) => {
+    const rotY = THREE.MathUtils.degToRad(f.rotation[1]);
+    return {
+      x: f.position[0],
+      z: f.position[2],
+      y0: f.position[1],
+      w: f.size[0],
+      h: f.size[1],
+      d: f.size[2],
+      nX: Math.sin(rotY), // front normal (local +Z after the Y rotation)
+      nZ: Math.cos(rotY),
+      tX: Math.cos(rotY), // in-face width axis (local +X)
+      tZ: -Math.sin(rotY),
+      ceiling: f.category === "ceiling_ac",
+    };
+  });
+}
+
+interface Obstacle {
+  minX: number;
+  maxX: number;
+  minY: number;
+  maxY: number;
+  minZ: number;
+  maxZ: number;
+}
+
+// Solid equipment boxes the air must flow AROUND, not through. Each furniture item becomes a world-space
+// axis-aligned box; a Y-rotation just swaps the footprint extents (exact for the 0/90/180/270° facings
+// used in these scenes).
+function makeObstacles(sceneData: SceneGraph): Obstacle[] {
+  return sceneData.furniture.map((f) => {
+    const [w, h, d] = f.size;
+    const rotY = THREE.MathUtils.degToRad(f.rotation[1]);
+    const ax = Math.abs(Math.cos(rotY)) * (w / 2) + Math.abs(Math.sin(rotY)) * (d / 2);
+    const az = Math.abs(Math.sin(rotY)) * (w / 2) + Math.abs(Math.cos(rotY)) * (d / 2);
+    const [cx, cy, cz] = f.position;
+    return { minX: cx - ax, maxX: cx + ax, minY: cy, maxY: cy + h, minZ: cz - az, maxZ: cz + az };
+  });
 }
 
 // CFD-standard Jet colormap (MATLAB Jet) for temperature visualization.
@@ -54,6 +127,7 @@ export class AirflowSystem {
   private streamlineVelocities!: Float32Array;
   private streamlineAges!: Float32Array;
   private streamlineMaxAges!: Float32Array;
+  private streamlineMaxSpeedBase!: Float32Array;
   private trailHistory!: Float32Array;
   private trailHistoryIdx!: Int32Array;
   private trailPositions!: Float32Array;
@@ -61,6 +135,7 @@ export class AirflowSystem {
   private trailGeometry!: THREE.BufferGeometry;
   private trailLines!: THREE.LineSegments;
   private cachedHeatSources: HeatSource[] = [];
+  private obstacles: Obstacle[] = [];
   private initialised = false;
 
   constructor(group: THREE.Group) {
@@ -74,12 +149,14 @@ export class AirflowSystem {
     this.streamlineVelocities = new Float32Array(STREAMLINE_COUNT * 3);
     this.streamlineAges = new Float32Array(STREAMLINE_COUNT);
     this.streamlineMaxAges = new Float32Array(STREAMLINE_COUNT);
+    this.streamlineMaxSpeedBase = new Float32Array(STREAMLINE_COUNT);
     this.trailHistory = new Float32Array(STREAMLINE_COUNT * TRAIL_LENGTH * 3);
     this.trailHistoryIdx = new Int32Array(STREAMLINE_COUNT);
     this.trailPositions = new Float32Array(VERTEX_COUNT * 3);
     this.trailColors = new Float32Array(VERTEX_COUNT * 3);
 
-    const coolingSources = sceneData.furniture.filter((f) => f.category === "cooling_unit");
+    const coolSources = makeCoolSources(sceneData);
+    this.obstacles = makeObstacles(sceneData);
     const [rw, , rd] = sceneData.room.dimensions;
 
     this.cachedHeatSources = sceneData.furniture
@@ -101,7 +178,7 @@ export class AirflowSystem {
       });
 
     for (let i = 0; i < STREAMLINE_COUNT; i++) {
-      this.resetStreamline(i, coolingSources, rw, rd);
+      this.resetStreamline(i, coolSources, rw, rd);
       this.streamlineAges[i] = Math.random() * this.streamlineMaxAges[i] * 0.5;
       const hx = this.streamlineHeads[i * 3];
       const hy = this.streamlineHeads[i * 3 + 1];
@@ -139,13 +216,92 @@ export class AirflowSystem {
     return this.initialised;
   }
 
-  private resetStreamline(i: number, coolingSources: Equipment[], rw: number, rd: number): void {
+  // Discharge one streamline from a cooling unit's vent. Floor-standing unit: out of the upper-front
+  // louver band (the top rectangular area), forward + slightly down. Ceiling cassette: down in 4 dirs.
+  private emitFromVent(idx: number, cool: CoolSource): void {
+    if (cool.ceiling) {
+      const dirs = [
+        [1, 0],
+        [-1, 0],
+        [0, 1],
+        [0, -1],
+      ] as const;
+      const [dxs, dzs] = dirs[Math.floor(Math.random() * 4)];
+      this.streamlineHeads[idx] = cool.x + dxs * cool.w * 0.35;
+      this.streamlineHeads[idx + 1] = cool.y0 + cool.h * 0.5;
+      this.streamlineHeads[idx + 2] = cool.z + dzs * cool.d * 0.35;
+      this.streamlineVelocities[idx] = dxs * 0.012 + (Math.random() - 0.5) * 0.002;
+      this.streamlineVelocities[idx + 1] = -0.006 - Math.random() * 0.003;
+      this.streamlineVelocities[idx + 2] = dzs * 0.012 + (Math.random() - 0.5) * 0.002;
+      return;
+    }
+    // upper-front louver band (0.70h..0.96h, width w*0.86) on the front face → forward + slightly down
+    const u = (Math.random() - 0.5) * cool.w * 0.86; // lateral along the vent width
+    const ventY = cool.h * (0.7 + Math.random() * 0.26);
+    const faceOff = cool.d / 2 + 0.03; // emit just outside the front face
+    this.streamlineHeads[idx] = cool.x + cool.tX * u + cool.nX * faceOff;
+    this.streamlineHeads[idx + 1] = cool.y0 + ventY;
+    this.streamlineHeads[idx + 2] = cool.z + cool.tZ * u + cool.nZ * faceOff;
+    const vOut = 0.05; // strong discharge so the jet shoots across the aisle
+    this.streamlineVelocities[idx] = cool.nX * vOut + (Math.random() - 0.5) * 0.003;
+    this.streamlineVelocities[idx + 1] = -0.014 - Math.random() * 0.004; // discharge aimed a little low
+    this.streamlineVelocities[idx + 2] = cool.nZ * vOut + (Math.random() - 0.5) * 0.003;
+  }
+
+  // Block a streamline from entering a solid box: push it to the nearest face and cancel the velocity
+  // component pointing into the surface, so the air slides along / around the equipment instead of through.
+  private resolveObstacle(idx: number): void {
+    for (const o of this.obstacles) {
+      const px = this.streamlineHeads[idx];
+      const py = this.streamlineHeads[idx + 1];
+      const pz = this.streamlineHeads[idx + 2];
+      if (
+        px <= o.minX ||
+        px >= o.maxX ||
+        py <= o.minY ||
+        py >= o.maxY ||
+        pz <= o.minZ ||
+        pz >= o.maxZ
+      ) {
+        continue;
+      }
+      const dxMin = px - o.minX;
+      const dxMax = o.maxX - px;
+      const dyMin = py - o.minY;
+      const dyMax = o.maxY - py;
+      const dzMin = pz - o.minZ;
+      const dzMax = o.maxZ - pz;
+      const m = Math.min(dxMin, dxMax, dyMin, dyMax, dzMin, dzMax);
+      const eps = 0.01;
+      if (m === dxMin) {
+        this.streamlineHeads[idx] = o.minX - eps;
+        if (this.streamlineVelocities[idx] > 0) this.streamlineVelocities[idx] = 0;
+      } else if (m === dxMax) {
+        this.streamlineHeads[idx] = o.maxX + eps;
+        if (this.streamlineVelocities[idx] < 0) this.streamlineVelocities[idx] = 0;
+      } else if (m === dyMin) {
+        this.streamlineHeads[idx + 1] = o.minY - eps;
+        if (this.streamlineVelocities[idx + 1] > 0) this.streamlineVelocities[idx + 1] = 0;
+      } else if (m === dyMax) {
+        this.streamlineHeads[idx + 1] = o.maxY + eps;
+        if (this.streamlineVelocities[idx + 1] < 0) this.streamlineVelocities[idx + 1] = 0;
+      } else if (m === dzMin) {
+        this.streamlineHeads[idx + 2] = o.minZ - eps;
+        if (this.streamlineVelocities[idx + 2] > 0) this.streamlineVelocities[idx + 2] = 0;
+      } else {
+        this.streamlineHeads[idx + 2] = o.maxZ + eps;
+        if (this.streamlineVelocities[idx + 2] < 0) this.streamlineVelocities[idx + 2] = 0;
+      }
+    }
+  }
+
+  private resetStreamline(i: number, coolSources: CoolSource[], rw: number, rd: number): void {
     const idx = i * 3;
     const roll = Math.random();
 
     if (roll < 0.45 && this.cachedHeatSources.length > 0) {
       const src = this.cachedHeatSources[Math.floor(Math.random() * this.cachedHeatSources.length)];
-      const backOff = 0.3 + Math.random() * 0.7;
+      const backOff = 0.5 + Math.random() * 0.6; // start just behind the rack's exhaust face, not inside it
       this.streamlineHeads[idx] = src.x + src.backX * backOff + (Math.random() - 0.5) * 0.3;
       this.streamlineHeads[idx + 1] = 0.3 + Math.random() * src.h;
       this.streamlineHeads[idx + 2] = src.z + src.backZ * backOff + (Math.random() - 0.5) * 0.3;
@@ -153,28 +309,9 @@ export class AirflowSystem {
       this.streamlineVelocities[idx] = src.backX * 0.012 + (Math.random() - 0.5) * 0.003;
       this.streamlineVelocities[idx + 1] = 0.01 + Math.random() * 0.015;
       this.streamlineVelocities[idx + 2] = src.backZ * 0.012 + (Math.random() - 0.5) * 0.003;
-    } else if (roll < 0.8 && coolingSources.length > 0) {
-      const cool = coolingSources[Math.floor(Math.random() * coolingSources.length)];
-      this.streamlineHeads[idx] = cool.position[0] + (Math.random() - 0.5) * cool.size[0];
-      this.streamlineHeads[idx + 1] = 0.05 + Math.random() * 0.3;
-      this.streamlineHeads[idx + 2] = cool.position[2] + (Math.random() - 0.5) * cool.size[2];
-
-      let bestDx = (Math.random() - 0.5) * 0.02;
-      let bestDz = (Math.random() - 0.5) * 0.02;
-      if (this.cachedHeatSources.length > 0) {
-        const target =
-          this.cachedHeatSources[Math.floor(Math.random() * this.cachedHeatSources.length)];
-        const frontTargetX = target.x + target.frontX * 0.6;
-        const frontTargetZ = target.z + target.frontZ * 0.6;
-        const dx = frontTargetX - cool.position[0];
-        const dz = frontTargetZ - cool.position[2];
-        const dist = Math.sqrt(dx * dx + dz * dz) + 0.1;
-        bestDx = (dx / dist) * 0.02 + (Math.random() - 0.5) * 0.003;
-        bestDz = (dz / dist) * 0.02 + (Math.random() - 0.5) * 0.003;
-      }
-      this.streamlineVelocities[idx] = bestDx;
-      this.streamlineVelocities[idx + 1] = -0.001 + Math.random() * 0.001;
-      this.streamlineVelocities[idx + 2] = bestDz;
+    } else if (roll < 0.8 && coolSources.length > 0) {
+      // Cold supply: discharge from the AC's vent (top rectangular area), not the floor or the sides.
+      this.emitFromVent(idx, coolSources[Math.floor(Math.random() * coolSources.length)]);
     } else {
       const roomH = 3.5;
       if (this.cachedHeatSources.length > 0) {
@@ -191,10 +328,10 @@ export class AirflowSystem {
 
       let driftX = (Math.random() - 0.5) * 0.01;
       let driftZ = (Math.random() - 0.5) * 0.01;
-      if (coolingSources.length > 0) {
-        const cool = coolingSources[Math.floor(Math.random() * coolingSources.length)];
-        const dx = cool.position[0] - this.streamlineHeads[idx];
-        const dz = cool.position[2] - this.streamlineHeads[idx + 2];
+      if (coolSources.length > 0) {
+        const cool = coolSources[Math.floor(Math.random() * coolSources.length)];
+        const dx = cool.x - this.streamlineHeads[idx];
+        const dz = cool.z - this.streamlineHeads[idx + 2];
         const dist = Math.sqrt(dx * dx + dz * dz) + 0.1;
         driftX = (dx / dist) * 0.015;
         driftZ = (dz / dist) * 0.015;
@@ -206,6 +343,9 @@ export class AirflowSystem {
 
     this.streamlineAges[i] = 0;
     this.streamlineMaxAges[i] = 200 + Math.random() * 300;
+    // per-source speed cap scaled to real airflow (AC power jet > rack exhaust > room drift)
+    this.streamlineMaxSpeedBase[i] =
+      roll < 0.45 ? SPEED_RACK : roll < 0.8 ? SPEED_AC : SPEED_AMBIENT;
     this.trailHistoryIdx[i] = 0;
 
     const hx = this.streamlineHeads[idx];
@@ -246,7 +386,7 @@ export class AirflowSystem {
         };
       });
 
-    const coolingSources = sceneData.furniture.filter((f) => f.category === "cooling_unit");
+    const coolSources = makeCoolSources(sceneData);
     const [rw, rh, rd] = sceneData.room.dimensions;
 
     for (let i = 0; i < STREAMLINE_COUNT; i++) {
@@ -266,7 +406,7 @@ export class AirflowSystem {
         pz < -0.5 ||
         pz > rd + 0.5
       ) {
-        this.resetStreamline(i, coolingSources, rw, rd);
+        this.resetStreamline(i, coolSources, rw, rd);
         continue;
       }
 
@@ -327,16 +467,32 @@ export class AirflowSystem {
         }
       }
 
-      for (const cool of coolingSources) {
-        const dx = px - cool.position[0];
-        const dz = pz - cool.position[2];
+      for (const cool of coolSources) {
+        const dx = px - cool.x;
+        const dz = pz - cool.z;
         const dist = Math.sqrt(dx * dx + dz * dz);
 
-        if (py < 1.0 && dist < 4.0) {
-          const blowStrength = (0.008 * loadFactor) / (1 + dist * 0.3);
-          forceX += (dx / (dist + 0.1)) * blowStrength;
-          forceZ += (dz / (dist + 0.1)) * blowStrength;
-          forceY -= 0.002;
+        if (cool.ceiling) {
+          if (py < 1.0 && dist < 4.0) {
+            const blow = (0.008 * loadFactor) / (1 + dist * 0.3); // cassette: spread radially outward
+            forceX += (dx / (dist + 0.1)) * blow;
+            forceZ += (dz / (dist + 0.1)) * blow;
+            forceY -= 0.002;
+          }
+        } else {
+          // Floor-standing unit: a STRONG directed jet, sustained down a forward corridor so the cold air
+          // shoots almost to the far end of the aisle before it sinks and the racks draw it in.
+          const fwd = dx * cool.nX + dz * cool.nZ; // distance in front of the vent
+          const reach = (Math.abs(cool.nX) > Math.abs(cool.nZ) ? rw : rd) * 0.92;
+          if (fwd > -0.2 && fwd < reach && py < cool.y0 + cool.h * 0.83 + 0.5) {
+            const perpX = dx - fwd * cool.nX;
+            const perpZ = dz - fwd * cool.nZ;
+            const lateral = Math.exp(-(perpX * perpX + perpZ * perpZ) / 0.7); // tight jet core
+            const jet = 0.06 * loadFactor * (1 - fwd / reach) * lateral;
+            forceX += cool.nX * jet;
+            forceZ += cool.nZ * jet;
+            forceY -= jet * 0.35; // discharge tilts downward (louver angle) — aim the jet a little low
+          }
         }
 
         if (py > 1.5 && dist < 6.0) {
@@ -353,27 +509,21 @@ export class AirflowSystem {
         forceY += heatInfluence * 0.005;
       }
 
+      // Recirculation only (NOT a soft ceiling push — the hard ceiling clamp handles solidity): warm air
+      // pooled under the ceiling is drawn back toward the AC return.
       if (py > rh - 0.5) {
-        const penetration = (py - (rh - 0.5)) / 0.5;
-        forceY -= 0.015 + penetration * 0.02;
-        for (const cool of coolingSources) {
-          const dx = cool.position[0] - px;
-          const dz = cool.position[2] - pz;
+        for (const cool of coolSources) {
+          const dx = cool.x - px;
+          const dz = cool.z - pz;
           const dist = Math.sqrt(dx * dx + dz * dz) + 0.1;
           forceX += (dx / dist) * 0.005;
           forceZ += (dz / dist) * 0.005;
         }
       }
 
-      if (py < 0.1 && heatInfluence < 0.5) {
-        forceY += 0.001;
-      }
-
-      if (px < 0.3) forceX += 0.004;
-      if (px > rw - 0.3) forceX -= 0.004;
-      if (pz < 0.3) forceZ += 0.004;
-      if (pz > rd - 0.3) forceZ -= 0.004;
-
+      // No soft wall / floor pushes: solids (walls, floor, ceiling, equipment) are enforced purely by the
+      // hard clamps + resolveObstacle below. The only forces left are real airflow (rack fans, AC jet,
+      // buoyancy, recirculation) and turbulence.
       this.streamlineVelocities[idx] = this.streamlineVelocities[idx] * damping + forceX;
       this.streamlineVelocities[idx + 1] = this.streamlineVelocities[idx + 1] * damping + forceY;
       this.streamlineVelocities[idx + 2] = this.streamlineVelocities[idx + 2] * damping + forceZ;
@@ -383,7 +533,7 @@ export class AirflowSystem {
           this.streamlineVelocities[idx + 1] ** 2 +
           this.streamlineVelocities[idx + 2] ** 2,
       );
-      const maxSpeed = 0.07 * (0.5 + loadFactor);
+      const maxSpeed = this.streamlineMaxSpeedBase[i] * (0.5 + loadFactor);
       if (speed > maxSpeed) {
         const s = maxSpeed / speed;
         this.streamlineVelocities[idx] *= s;
@@ -408,6 +558,26 @@ export class AirflowSystem {
         this.streamlineHeads[idx + 1] = rh - 0.05;
         this.streamlineVelocities[idx + 1] = -Math.abs(this.streamlineVelocities[idx + 1]) * 0.3;
       }
+
+      // Hard walls — keep air inside the VISIBLE room shell. Previously the only wall limit was a soft
+      // push plus a reset 0.5 m BEYOND the wall, so air leaked out and looked bounded by a larger
+      // invisible shell. Clamp to the shell (room.dimensions) and cancel the outward velocity.
+      if (this.streamlineHeads[idx] < 0.02) {
+        this.streamlineHeads[idx] = 0.02;
+        if (this.streamlineVelocities[idx] < 0) this.streamlineVelocities[idx] = 0;
+      } else if (this.streamlineHeads[idx] > rw - 0.02) {
+        this.streamlineHeads[idx] = rw - 0.02;
+        if (this.streamlineVelocities[idx] > 0) this.streamlineVelocities[idx] = 0;
+      }
+      if (this.streamlineHeads[idx + 2] < 0.02) {
+        this.streamlineHeads[idx + 2] = 0.02;
+        if (this.streamlineVelocities[idx + 2] < 0) this.streamlineVelocities[idx + 2] = 0;
+      } else if (this.streamlineHeads[idx + 2] > rd - 0.02) {
+        this.streamlineHeads[idx + 2] = rd - 0.02;
+        if (this.streamlineVelocities[idx + 2] > 0) this.streamlineVelocities[idx + 2] = 0;
+      }
+
+      this.resolveObstacle(idx); // air flows around the equipment, not through it
 
       const cursor = this.trailHistoryIdx[i] % TRAIL_LENGTH;
       const hi = (i * TRAIL_LENGTH + cursor) * 3;

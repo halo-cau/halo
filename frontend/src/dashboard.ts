@@ -737,6 +737,7 @@ interface ThermalResp {
     rci_lo: number;
     shi: number;
     rhi: number;
+    rti: number;
     mean_intake: number;
     mean_exhaust: number;
   };
@@ -885,9 +886,13 @@ async function populateScanPicker(): Promise<void> {
     label: `${escapeHtml(s.name)}${s.kind === "images" ? " (멀티뷰)" : ""}`,
   }));
   let server: { id: string; label: string }[] = [];
+  let precomputedOnly = false;
   try {
     const r = await fetch("/api/v1/twin/runs").then((x) => (x.ok ? x.json() : { rooms: [] }));
-    server = ((r.rooms ?? []) as ServerRoom[]).map((rm) => ({
+    const rooms = (r.rooms ?? []) as ServerRoom[];
+    const pre = rooms.filter((rm) => rm.precomputed);
+    precomputedOnly = pre.length > 0; // when a precomputed sample exists, show only it
+    server = (precomputedOnly ? pre : rooms).map((rm) => ({
       id: rm.id,
       label: `${rm.id.slice(0, 8)} · ${rm.n_racks}랙${rm.precomputed ? " (기본)" : ""}`,
     }));
@@ -895,9 +900,11 @@ async function populateScanPicker(): Promise<void> {
     /* offline or no backend: fall back to the local registry only */
   }
 
+  // When a precomputed sample exists it is the only selectable room;
+  // otherwise merge the browser's local scans with the server runs.
   const seen = new Set<string>();
   const merged: { id: string; label: string }[] = [];
-  for (const o of [...local, ...server]) {
+  for (const o of precomputedOnly ? server : [...local, ...server]) {
     if (!seen.has(o.id)) {
       seen.add(o.id);
       merged.push(o);
@@ -920,6 +927,49 @@ async function populateScanPicker(): Promise<void> {
   }
   sel.value = currentScanJob;
   void showDetectedRoom(); // render the selected room immediately so results are visible on load
+}
+
+// ---------- 시나리오 비교 선택기: pick two (room, variant) views and jump to the side-by-side page ----------
+// Each view is a room rendered as either 원본 (as-scanned, GET placements) or RL 최적화 (POST /optimize).
+// The button hands the pair to index.html via ?lj/lv/rj/rv, which builds both panels with lib/twinScene.
+async function populateCompareChooser(): Promise<void> {
+  const left = document.getElementById("cmp-left") as HTMLSelectElement | null;
+  const right = document.getElementById("cmp-right") as HTMLSelectElement | null;
+  const btn = document.getElementById("compare-scenario-btn") as HTMLButtonElement | null;
+  if (!left || !right || !btn) return;
+
+  let rooms: ServerRoom[] = [];
+  try {
+    const r = await fetch("/api/v1/twin/runs").then((x) => (x.ok ? x.json() : { rooms: [] }));
+    rooms = (r.rooms ?? []) as ServerRoom[];
+  } catch {
+    /* no backend */
+  }
+  const pre = rooms.filter((rm) => rm.precomputed);
+  const pool = pre.length > 0 ? pre : rooms; // restrict to the precomputed run when present
+  if (pool.length === 0) {
+    btn.disabled = true;
+    return;
+  }
+  const opts = pool.flatMap((rm) => [
+    { value: `${rm.id}~scanned`, label: `${rm.id.slice(0, 8)} · 원본` },
+    { value: `${rm.id}~optimized`, label: `${rm.id.slice(0, 8)} · RL 최적화` },
+  ]);
+  const html = opts
+    .map((o) => `<option value="${o.value}">${escapeHtml(o.label)}</option>`)
+    .join("");
+  left.innerHTML = html;
+  right.innerHTML = html;
+  left.value = opts[0].value; // default: as-scanned ...
+  right.value = opts[1]?.value ?? opts[0].value; // ... vs its RL-optimised proposal
+  btn.disabled = false;
+
+  btn.addEventListener("click", () => {
+    const [lj, lv] = left.value.split("~");
+    const [rj, rv] = right.value.split("~");
+    const p = new URLSearchParams({ lj, lv, rj, rv });
+    window.location.href = `./index.html?${p.toString()}`;
+  });
 }
 
 document.getElementById("scan-select")?.addEventListener("change", (e) => {
@@ -949,7 +999,11 @@ async function showDetectedRoom(): Promise<void> {
     renderKpis(scene, metrics);
     renderFloorPlan(scene, metrics);
     renderComplianceSummary(scene, metrics);
-    renderTimeSeries(scene, metrics.peakIntake); // daily profile anchored to the room's real peak
+    // Drive the time series from the REAL per-hour steady-state solve (POST /temporal), not the synthetic
+    // daily projection. That projection collapses to a flat line at ambient when the room's peak intake is
+    // ~22 C (a well-cooled room), which is misleading on first load; the solver curve varies with the
+    // outside-air cycle and shows the true result. Async (~seconds); leaves the panels rendered meanwhile.
+    void runTemporalAnalysis();
     renderSavings(scene, metrics); // real current cooling cost / state (no fabricated comparison)
     if (out) {
       out.textContent =
@@ -997,6 +1051,7 @@ interface OptimizeResp {
       rci_lo: number;
       shi: number;
       rhi: number;
+      rti: number;
       mean_intake: number;
       mean_exhaust: number;
     };
@@ -1099,30 +1154,52 @@ function renderOptimizeComparison(cur: ThermalResp, r: OptimizeResp): void {
       <div class="savings-sub">열 해석 없음 — 배치만 표시</div>`;
     return;
   }
-  // delta = RL - current; for compliance/RCI higher is better, for temps lower is better.
-  const row = (lbl: string, curV: string, rlV: string, better: boolean | null) => {
-    const col = better === null ? C.text2 : better ? C.successText : C.dangerText;
-    return `<div class="item"><div class="lbl">${lbl}</div>
-      <div class="v" style="font-size:13px;">${curV} <span style="color:${C.text3};">→</span>
-      <span style="color:${col};">${rlV}</span></div></div>`;
-  };
   const curComp = cur.compliant_racks;
   const rlComp = th.compliant_racks;
-  const curMax = cur.temp_max_c;
-  const rlMax = th.temp_max_c;
-  const improved = rlComp > curComp || (rlComp === curComp && rlMax < curMax - 0.05);
+  const curMaxIn = Math.max(...cur.racks.map((rk) => rk.intake_temp), Number.NEGATIVE_INFINITY);
+  const rlMaxIn = Math.max(
+    ...(th.racks ?? []).map((rk) => rk.intake_temp),
+    Number.NEGATIVE_INFINITY,
+  );
+  // Compliance/RCI are usually saturated on a tidy room; SHI (cold-air isolation) and RTI (airflow
+  // balance) are the metrics that actually move, so "improved" counts those too — not just rack count.
+  const improved =
+    rlComp > curComp ||
+    th.room.shi < cur.room.shi - 0.01 ||
+    Math.abs(th.room.rti - 100) < Math.abs(cur.room.rti - 100) - 1 ||
+    (rlComp === curComp && th.temp_max_c < cur.temp_max_c - 0.05);
   const headline = improved ? "RL 최적화 — 개선됨" : "RL 최적화 — 현재 배치가 이미 우수";
+  // one "before → after" row with a coloured delta; better(cur, rl) decides the colour.
+  const mrow = (
+    lbl: string,
+    sub: string,
+    c: number,
+    rl: number,
+    unit: string,
+    dp: number,
+    better: (a: number, b: number) => boolean,
+  ): string => {
+    const dlt = rl - c;
+    const col =
+      Math.abs(dlt) < 0.5 * 10 ** -dp ? C.text2 : better(c, rl) ? C.successText : C.dangerText;
+    return `<div class="item"><div class="lbl">${lbl}<small style="color:${C.text3};"> ${sub}</small></div>
+      <div class="v" style="font-size:13px;">${c.toFixed(dp)}${unit}
+      <span style="color:${C.text3};">→</span>
+      <span style="color:${col};">${rl.toFixed(dp)}${unit}</span>
+      <span style="color:${col};font-size:11px;"> (${dlt >= 0 ? "+" : ""}${dlt.toFixed(dp)})</span></div></div>`;
+  };
   host.innerHTML = `
     <div class="savings-lbl">${headline}</div>
     <div class="savings-val" style="color:${improved ? C.successText : C.text1};font-size:18px;">
       준수 ${curComp}/${r.n_racks} → ${rlComp}/${r.n_racks}</div>
-    <div class="savings-sub">현재 스캔 배치 대비 · RL 정책 추론 결과</div>
+    <div class="savings-sub">현재 스캔 배치 대비 · RL 정책 추론 결과 (변화량 표시)</div>
     <hr/>
     <div class="savings-grid">
-      ${row("RCI (高)", `${cur.room.rci_hi.toFixed(0)}%`, `${th.room.rci_hi.toFixed(0)}%`, th.room.rci_hi >= cur.room.rci_hi)}
-      ${row("평균 흡기", `${cur.room.mean_intake.toFixed(1)}°C`, `${th.room.mean_intake.toFixed(1)}°C`, th.room.mean_intake <= cur.room.mean_intake + 0.05)}
-      ${row("최고 온도", `${curMax.toFixed(1)}°C`, `${rlMax.toFixed(1)}°C`, rlMax <= curMax + 0.05)}
-      ${row("준수 랙", `${curComp}`, `${rlComp}`, rlComp >= curComp)}
+      ${mrow("RCI", "高 ↑", cur.room.rci_hi, th.room.rci_hi, "%", 0, (a, b) => b >= a)}
+      ${mrow("SHI", "격리 ↓", cur.room.shi, th.room.shi, "", 2, (a, b) => b <= a)}
+      ${mrow("RTI", "100% 이상적", cur.room.rti, th.room.rti, "%", 0, (a, b) => Math.abs(b - 100) <= Math.abs(a - 100))}
+      ${mrow("최고 흡기", "↓", curMaxIn, rlMaxIn, "°C", 1, (a, b) => b <= a)}
+      ${mrow("평균 흡기", "↓", cur.room.mean_intake, th.room.mean_intake, "°C", 1, (a, b) => b <= a)}
     </div>`;
 }
 
@@ -1503,3 +1580,4 @@ function render() {
 
 render();
 void populateScanPicker();
+void populateCompareChooser();

@@ -1,10 +1,10 @@
 // HALO Scene Graph 데이터
 // 서버실(Data Center) 공간 — 3단계 배치 결과: random → rule-based → RL 최적화
 //
-// allScenes (the 시나리오 page) is driven by the REAL precomputed twin via ./realScenes
+// allScenes (the 시나리오 page) is driven by the server-room twin via ./realScenes
 // (random = as-scanned, optimized = the imitation /optimize proposal — same data the dashboard
-// renders live). The hand-authored randomPlacement / ruleBasedPlacement / rlOptimizedPlacement
-// literals below are kept as a fallback / reference layout and are no longer wired into allScenes.
+// renders live). The static randomPlacement / ruleBasedPlacement / rlOptimizedPlacement
+// literals below are kept as a fallback and are no longer wired into allScenes.
 import { realOptimizedPlacement, realRandomPlacement } from "./realScenes";
 
 export interface Opening {
@@ -46,6 +46,21 @@ export interface Score {
   constraint: number; // 제약 조건 충족
 }
 
+// Real mid-height (z ~ 1 m) temperature slice of the solved 3-D field, supplied by the backend so the floor
+// heatmap shows the SAME field the ASHRAE metrics come from. values[i][j] = °C at world
+// (x = ox + i*res_m, y = oy + j*res_m); the scene maps twin Y -> scene Z, so j indexes scene depth.
+export interface MidTemp {
+  z_m: number;
+  res_m: number;
+  nx: number;
+  ny: number;
+  ox: number;
+  oy: number;
+  values: number[][];
+  tmin: number;
+  tmax: number;
+}
+
 export interface SceneGraph {
   id: string;
   name: string;
@@ -57,6 +72,8 @@ export interface SceneGraph {
   };
   furniture: Equipment[];
   score: Score;
+  midTemp?: MidTemp; // real solver mid-height field for the floor heatmap (absent for static scenes)
+  maxIntakeC?: number; // real hottest rack-intake temperature (°C) from the 3-D solve; absent for demo scenes
 }
 
 // 비정형 서버실: 12m x 3.5m x 9m (기존 건물 전환 공간)

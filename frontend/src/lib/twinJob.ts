@@ -62,7 +62,7 @@ export interface TwinStatus {
   pct?: number;
   outputs?: Record<string, string>;
   error?: string;
-  precomputed?: boolean; // served from a precomputed sample (demo mode), not a live pipeline run
+  precomputed?: boolean; // true when served from a precomputed reconstruction rather than a live run
 }
 
 export function loadSavedJob(): SavedJob | null {

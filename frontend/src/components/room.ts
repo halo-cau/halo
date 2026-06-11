@@ -39,7 +39,7 @@ export function buildRoom(group: THREE.Group, sceneData: SceneGraph): void {
   const wallMat = new THREE.MeshStandardMaterial({
     color: 0x606060,
     transparent: true,
-    opacity: 0.40,
+    opacity: 0.4,
     side: THREE.DoubleSide,
   });
 
@@ -92,8 +92,10 @@ export function buildRoom(group: THREE.Group, sceneData: SceneGraph): void {
   // Openings
   for (const opening of sceneData.room.openings) {
     const isDoor = opening.type === "door";
-    const isVent = opening.type === "vent";
-    const color = isDoor ? 0xe89e4f : isVent ? 0x378add : 0x1d9e75;
+    // Vents represent the AC supply; the AC mesh draws its own discharge arrow, so skip the wall marker
+    // and arrow for them (removes the blue rectangle + arrow on the wall behind the AC).
+    if (opening.type === "vent") continue;
+    const color = isDoor ? 0xe89e4f : 0x1d9e75;
     const markerH = isDoor ? 2.4 : 0.8;
 
     const markerGeo = new THREE.BoxGeometry(opening.width, markerH, 0.08);
@@ -116,24 +118,5 @@ export function buildRoom(group: THREE.Group, sceneData: SceneGraph): void {
       marker.position.set(0, isDoor ? markerH / 2 : opening.position[1], opening.position[2]);
     }
     group.add(marker);
-
-    if (isVent) {
-      const arrowDir = new THREE.Vector3(0, 0, 1);
-      if (opening.wall === "south") arrowDir.set(0, 0, -1);
-      else if (opening.wall === "east") arrowDir.set(-1, 0, 0);
-      else if (opening.wall === "west") arrowDir.set(1, 0, 0);
-
-      const arrowOrigin = new THREE.Vector3(
-        opening.position[0],
-        opening.position[1],
-        opening.wall === "north" ? 0.2 : opening.wall === "south" ? rd - 0.2 : opening.position[2],
-      );
-      if (opening.wall === "east")
-        arrowOrigin.set(rw - 0.2, opening.position[1], opening.position[2]);
-      if (opening.wall === "west") arrowOrigin.set(0.2, opening.position[1], opening.position[2]);
-
-      const arrow = new THREE.ArrowHelper(arrowDir, arrowOrigin, 1.2, 0x378add, 0.3, 0.15);
-      group.add(arrow);
-    }
   }
 }

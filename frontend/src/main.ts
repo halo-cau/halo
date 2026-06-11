@@ -8,6 +8,7 @@ import { buildRoom } from "./components/room";
 import { buildZones } from "./components/zones";
 import { allScenes, getLoadFactor, type SceneGraph } from "./data/sceneGraphs";
 import { computeAshraeMetrics } from "./lib/ashrae";
+import { type SceneVariant, sceneFromTwin } from "./lib/twinScene";
 
 // ===== Shared simulation state =====
 let simPlaying = false;
@@ -162,8 +163,15 @@ class SceneViewer {
 
   updateTempReadout(loadFactor: number) {
     if (!this.tempReadout) return;
+    // Show the real hottest rack intake from the 3-D solve (the worst inlet, and the metric that
+    // distinguishes layouts). Fall back to the analytical estimate only for static scenes with no field.
+    const maxIn = this.sceneData.maxIntakeC;
+    if (maxIn != null) {
+      this.tempReadout.textContent = `최고 흡기 ${maxIn.toFixed(1)}°C`;
+      return;
+    }
     const { peakIntake } = computeAshraeMetrics(this.sceneData, loadFactor);
-    this.tempReadout.textContent = `최고온도 ${peakIntake.toFixed(1)}°C`;
+    this.tempReadout.textContent = `최고 흡기 ${peakIntake.toFixed(1)}°C`;
   }
 
   updateEquipmentGlow(loadFactor: number) {
@@ -234,12 +242,40 @@ class SceneViewer {
 let leftViewer: SceneViewer;
 let rightViewer: SceneViewer;
 
-function init() {
+// 시나리오 panels: build the two rooms at runtime from the live twin (lib/twinScene). The dashboard's
+// "compare" chooser hands a pair via ?lj/lv/rj/rv; with no params we default to the precomputed run
+// (left = as-scanned, right = its RL-optimised proposal). The static realScenes (allScenes) is the
+// fallback if the backend is unreachable.
+async function resolveScenes(): Promise<[SceneGraph, SceneGraph]> {
+  const q = new URLSearchParams(location.search);
+  let lj = q.get("lj");
+  let rj = q.get("rj");
+  const lv = (q.get("lv") as SceneVariant) || "scanned";
+  const rv = (q.get("rv") as SceneVariant) || "optimized";
+  if (!lj || !rj) {
+    const runs = await fetch("/api/v1/twin/runs").then((r) => (r.ok ? r.json() : { rooms: [] }));
+    const rooms = (runs.rooms ?? []) as { id: string; precomputed?: boolean }[];
+    const pick = rooms.find((x) => x.precomputed)?.id ?? rooms[0]?.id;
+    if (!pick) throw new Error("no twin runs");
+    lj = lj || pick;
+    rj = rj || pick;
+  }
+  return Promise.all([sceneFromTwin(lj, lv), sceneFromTwin(rj, rv)]);
+}
+
+async function init() {
   const leftCanvas = document.getElementById("canvas-left") as HTMLCanvasElement;
   const rightCanvas = document.getElementById("canvas-right") as HTMLCanvasElement;
 
-  leftViewer = new SceneViewer(leftCanvas, allScenes[0], document.getElementById("temp-left"));
-  rightViewer = new SceneViewer(rightCanvas, allScenes[1], document.getElementById("temp-right"));
+  let scenes: [SceneGraph, SceneGraph];
+  try {
+    scenes = await resolveScenes();
+  } catch {
+    scenes = [allScenes[0], allScenes[1]]; // fallback: static realScenes snapshot
+  }
+
+  leftViewer = new SceneViewer(leftCanvas, scenes[0], document.getElementById("temp-left"));
+  rightViewer = new SceneViewer(rightCanvas, scenes[1], document.getElementById("temp-right"));
 
   setupButtons();
   setupCameraSync();
@@ -349,4 +385,4 @@ function setupButtons() {
   updateSimulation();
 }
 
-init();
+void init();
