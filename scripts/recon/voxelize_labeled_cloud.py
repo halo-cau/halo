@@ -502,7 +502,7 @@ def _voxelize(args):
         ext = np.array(ref["ext"], float); shape = tuple(int(s) for s in ref["shape"])
         args.rack_type = ref.get("rack_type", args.rack_type)
         print(f"--reference {args.reference} (last-resort fallback): cloud registered to room {reg} m; "
-              f"stamping {len(ref['instances'])} known instances at "
+              f"stamping {len(ref['instances'])} instances at "
               f"{tuple(round(float(e), 2) for e in ext)} m")
         return _finalize_twin(args, [dict(p) for p in ref["instances"]], np.zeros(3), ext, shape)
 

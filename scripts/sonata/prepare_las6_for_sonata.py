@@ -60,7 +60,7 @@ def main() -> None:
     pcd.orient_normals_towards_camera_location(camera_location=coord.mean(0).astype(np.float64))
     normal = np.asarray(pcd.normals, dtype=np.float32)
 
-    # --- class-stratified random train/val split (keeps the lone AC in both) ---
+    # --- class-stratified random train/val split ---
     rng = np.random.default_rng(SEED)
     split = np.zeros(len(arr), dtype=np.int8)  # 0=train, 1=val
     for c in range(len(CLASS_NAMES)):

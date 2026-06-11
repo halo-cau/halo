@@ -301,7 +301,7 @@ def project_vertex_labels_to_voxels(
 
 
 # Canonical priors per detected label: (voxel_id, base dims in metres W×D×H).
-# Detected racks are forced to 42U so their voxel representation is a solid
+# Detected racks are normalized to 42U so their voxel representation is a solid
 # block instead of a hollow point-cloud shell. ACs use a wall-mounted slab.
 _LABEL_TO_PRIOR: dict[str, tuple[int, tuple[float, float, float]]] = {
     "server rack":           (RACK_BODY,        RACK_DIMENSIONS[DEFAULT_RACK_TYPE]),

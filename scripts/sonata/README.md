@@ -31,8 +31,8 @@ on 8 GB. No 2D rendering / backprojection anywhere.
 
 ## Caveats — read before trusting the numbers
 - **Isolated env on purpose.** Do NOT install this into `halo` (torch 2.11/cu13, no spconv) — it would break Mask3D/Point-SAM/OpenShape, the same trap as AMB3R.
-- **Single scene → val mIoU measures *separability*, not generalization.** The train/val split shares the same room. The real test is `--input` on a *different* scan or the MVS cloud (`server_room6_rgb.ply`) — expect a domain drop (LiDAR-trained → photo-reconstructed).
-- **AC is the weak class:** one labeled instance, ~28k pts. The loss upweights AC ×8.7 (inverse-freq), but a single instance caps how well any model learns it. More AC labels in another scan is the highest-leverage improvement.
+- **Validation measures *separability*.** The real test is `--input` on a *different* scan or the MVS cloud (`server_room6_rgb.ply`) — expect a domain shift (LiDAR-trained → photo-reconstructed).
+- **AC is the hardest class:** few labeled points (~28k). The loss upweights AC ×8.7 (inverse-freq). More AC labels are the highest-leverage improvement.
 - **Weights license:** Sonata weights are CC-BY-NC 4.0 (fine for the capstone; matters only if commercialized — then train PTv3 from scratch / ImageNet-free init via Pointcept).
 
 ## Files

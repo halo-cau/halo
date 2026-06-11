@@ -547,7 +547,7 @@ def _default_temporal_samples(payload: dict) -> list[dict]:
 
 @router.post("/twin/{job_id}/temporal")
 def twin_temporal(job_id: str, payload: dict = Body(default={})) -> JSONResponse:
-    """Temporal ASHRAE analysis: a per-time-t steady-state thermal sweep, not a fabricated projection.
+    """Temporal ASHRAE analysis: a per-time-t steady-state thermal sweep (each t is a full solve).
 
     For each discrete time t the method is exactly: (1) set the room default temperature to the OUTSIDE air
     temperature at t; (2) run every machine at once -- the AC fixed at ``ac_supply_c`` (default 18 C) and the

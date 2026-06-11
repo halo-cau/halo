@@ -640,7 +640,7 @@ function renderComplianceSummary(scene: SceneGraph, m: SceneAshraeMetrics) {
 function renderSavings(scene: SceneGraph, m: SceneAshraeMetrics) {
   const host = document.getElementById("savings-card") as HTMLElement;
   // The scanned room has no RL-optimized counterpart yet (the savings comparison needs that run), so
-  // show its REAL current cooling cost and ASHRAE state instead of a fabricated "vs random" figure.
+  // show its real current cooling cost and ASHRAE state.
   if (scene.id === "detected") {
     const { coolKw } = pueFor(scene, m);
     const annualMan = (coolKw * 24 * 365 * 130) / 10000;
@@ -712,10 +712,10 @@ function renderSavings(scene: SceneGraph, m: SceneAshraeMetrics) {
 }
 
 // ---------- Detected-room thermal: render the SCANNED twin in the dashboard ----------
-// The static scenes above are the demo fallback. This builds a SceneGraph + REAL ASHRAE metrics from the
+// The static scenes above are the fallback. This builds a SceneGraph + REAL ASHRAE metrics from the
 // scanned twin -- its layout from placements.json, its thermal/ASHRAE from the 3-D engine
-// (GET /api/v1/twin/{id}/thermal) -- and renders it through the same panels. The RL-optimised comparison
-// is deferred (no model yet), so the scanned scene stands in for "current"; "optimised" is the same scene.
+// (GET /api/v1/twin/{id}/thermal) -- and renders it through the same panels. The optimised layout is
+// built separately via the optimize action.
 const T_MIN_ALLOW = 15;
 const T_MIN_REC = 18;
 const T_MAX_ALLOW = 35;
@@ -1004,7 +1004,7 @@ async function showDetectedRoom(): Promise<void> {
     // ~22 C (a well-cooled room), which is misleading on first load; the solver curve varies with the
     // outside-air cycle and shows the true result. Async (~seconds); leaves the panels rendered meanwhile.
     void runTemporalAnalysis();
-    renderSavings(scene, metrics); // real current cooling cost / state (no fabricated comparison)
+    renderSavings(scene, metrics); // real current cooling cost / state
     if (out) {
       out.textContent =
         `스캔된 방 적용됨 — 권장 준수 ${metrics.recommendedCount}/${metrics.perRack.length} 랙 · ` +
@@ -1143,7 +1143,7 @@ function buildOptimizedScene(r: OptimizeResp): { scene: SceneGraph; metrics: Sce
   return { scene, metrics };
 }
 
-// Honest current-vs-RL comparison written into the savings card (no fabricated "vs random" figure).
+// Current-vs-RL comparison written into the savings card.
 function renderOptimizeComparison(cur: ThermalResp, r: OptimizeResp): void {
   const host = document.getElementById("savings-card") as HTMLElement;
   host.classList.remove("baseline");
@@ -1488,8 +1488,8 @@ document
   .getElementById("temporal-btn")
   ?.addEventListener("click", () => void runTemporalAnalysis());
 
-// ---------- Containment comparison: designed (hot/cold aisle) vs non-contained baseline ----------
-// POST /api/v1/twin/{id}/compare scores the same room + AC + racks twice -- the designed layout and the
+// ---------- Containment comparison: hot/cold aisle vs non-contained baseline ----------
+// POST /api/v1/twin/{id}/compare scores the room twice -- the contained hot/cold-aisle layout and the
 // same racks all facing one way (recirculation) -- so the delta is the cooling benefit of containment.
 interface CompareMetrics {
   compliant: number;

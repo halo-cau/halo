@@ -1,4 +1,4 @@
-"""Force a standard 42U rack geometric prior on the labeled point cloud.
+"""Apply a standard 42U rack geometric prior to the labeled point cloud.
 
 A server rack cannot physically be shaped differently from the EIA-310 /
 ASHRAE 42U standard: 60 cm wide × 100 cm deep × 200 cm tall. Rather than
@@ -16,8 +16,8 @@ racks, floor vertices in front, etc.), this script:
    - ``(class, instance)`` pairs listed via ``--preserve`` are skipped
      (default: ``5:1`` so the on-rack box cluster stays as box_clutter).
 
-The result: 13 geometrically-perfect 42U rack instances, no leakage from
-wall/floor noise.
+The result: clean 42U rack instances aligned to the standard footprint,
+free of wall/floor label noise.
 
 Usage::
 
