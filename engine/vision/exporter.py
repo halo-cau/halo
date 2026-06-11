@@ -30,9 +30,17 @@ def o3d_to_glb(mesh: o3d.geometry.TriangleMesh) -> bytes:
     """Convert an Open3D TriangleMesh to GLB binary bytes."""
     vertices = np.asarray(mesh.vertices)
     faces = np.asarray(mesh.triangles)
+    colors = None
 
     if mesh.has_vertex_colors():
         colors = (np.asarray(mesh.vertex_colors) * 255).astype(np.uint8)
+
+    if len(faces) == 0:
+        if colors is not None:
+            tri_mesh = trimesh.points.PointCloud(vertices, colors=colors)
+        else:
+            tri_mesh = trimesh.points.PointCloud(vertices)
+    elif colors is not None:
         tri_mesh = trimesh.Trimesh(vertices=vertices, faces=faces, vertex_colors=colors)
     else:
         tri_mesh = trimesh.Trimesh(vertices=vertices, faces=faces)

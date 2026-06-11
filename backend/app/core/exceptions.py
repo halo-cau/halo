@@ -14,12 +14,16 @@ class MeshTooLargeError(HTTPException):
         )
 
 
-ALLOWED_SCAN_EXTENSIONS = (".obj", ".ply")
+ALLOWED_SCAN_EXTENSIONS = (".obj", ".ply", ".las", ".laz")
+ALLOWED_SCAN_EXTENSIONS_DISPLAY = ", ".join(ALLOWED_SCAN_EXTENSIONS)
 
 
 class InvalidFileTypeError(HTTPException):
     def __init__(self, filename: str) -> None:
         super().__init__(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid file type: '{filename}'. Only .obj and .ply files are accepted.",
+            detail=(
+                f"Invalid file type: '{filename}'. "
+                f"Only {ALLOWED_SCAN_EXTENSIONS_DISPLAY} files are accepted."
+            ),
         )

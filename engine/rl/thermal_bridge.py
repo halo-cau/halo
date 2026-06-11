@@ -14,12 +14,16 @@ reward function can trust.
 
 Physical mapping
 ----------------
-Each RL grid cell corresponds to 0.4 m × 0.4 m of floor space (CELL_M).
-A 50×50 grid therefore covers a 20 m × 20 m room — identical to the
-voxel engine's default GRID_SHAPE of 200×200 at VOXEL_SIZE=0.1 m.
+Each RL grid cell corresponds to 0.2 m × 0.2 m of floor space (CELL_M).
+A 50×50 grid therefore covers a 10 m × 10 m room — matching the voxel
+engine's GRID_SHAPE of 100×100 at VOXEL_SIZE=0.1 m.  Rooms smaller than
+10 m × 10 m occupy a sub-grid; the outer cells become perimeter walls.
 
-Ceiling height defaults to 3.0 m (30 voxels).  Each RL cooling position
-maps to a ceiling-mounted CRAC blowing straight down.
+Ceiling height defaults to 3.0 m (30 voxels) for training-time random
+rooms.  When a real scanned room is used, pass the actual ceiling height
+via ThermalBridge(ceiling_m=...) so the 3-D voxel grid matches the scan.
+Each RL cooling position maps to a ceiling-mounted CRAC blowing straight
+down.
 
 Direction mapping (RL exhaust direction → RackFacing intake direction)
 ----------------------------------------------------------------------
@@ -49,34 +53,38 @@ from engine.core.config import (
     RACK_INTAKE,
     SPACE_EMPTY,
     VOXEL_SIZE,
+    CFM_TO_M3_S,
+    AIR_DENSITY_KG_M3,
+    AIR_CP_J_KG_K,
 )
 from engine.core.data_types import Coordinate, CoolingUnit, RackFacing, RackPlacement
 from engine.thermal.metrics import MetricsResult, compute_metrics
-from engine.thermal.solver import compute_thermal_field
+from engine.thermal.solver import compute_thermal_field, _world_to_index_solver
 
 # ---------------------------------------------------------------------------
 # Physical constants
 # ---------------------------------------------------------------------------
-CELL_M: float = 0.4          # metres per RL grid cell (50 cells → 20 m room)
-CEILING_M: float = 3.0       # room ceiling height in metres
-CEILING_V: int = int(round(CEILING_M / VOXEL_SIZE))   # = 30 voxels
+CELL_M: float = 0.2  # metres per RL grid cell (50 cells × 0.2 m = 10 m max room)
+_DEFAULT_CEILING_M: float = (
+    3.0  # default ceiling height for training; override with actual scan
+)
 
-# Voxels per RL cell along each horizontal axis
-_CELL_V: int = int(round(CELL_M / VOXEL_SIZE))        # = 4
+# Voxels per RL cell along each horizontal axis (recomputed from CELL_M)
+_CELL_V: int = int(round(CELL_M / VOXEL_SIZE))  # = 2
 
 # Direction → RackFacing (RL exhaust direction → solver intake direction)
 _DIR_TO_FACING: dict[int, RackFacing] = {
-    0: RackFacing.MINUS_X,   # RL exhaust +x → intake −x
-    1: RackFacing.PLUS_X,    # RL exhaust −x → intake +x
-    2: RackFacing.MINUS_Y,   # RL exhaust +y → intake −y
-    3: RackFacing.PLUS_Y,    # RL exhaust −y → intake +y
+    0: RackFacing.MINUS_X,  # RL exhaust +x → intake −x
+    1: RackFacing.PLUS_X,  # RL exhaust −x → intake +x
+    2: RackFacing.MINUS_Y,  # RL exhaust +y → intake −y
+    3: RackFacing.PLUS_Y,  # RL exhaust −y → intake +y
 }
 
 # Fixed facing → (axis, sign) for exhaust — mirrors solver._facing_to_axis_dir
 _FACING_AXIS_SIGN: dict[RackFacing, tuple[int, int]] = {
-    RackFacing.PLUS_X:  (0, -1),
+    RackFacing.PLUS_X: (0, -1),
     RackFacing.MINUS_X: (0, +1),
-    RackFacing.PLUS_Y:  (1, -1),
+    RackFacing.PLUS_Y: (1, -1),
     RackFacing.MINUS_Y: (1, +1),
 }
 
@@ -88,6 +96,10 @@ class ThermalBridge:
     ----------
     grid_size : int
         Side length of the RL grid (default 50).
+    ceiling_m : float
+        Room ceiling height in metres.  Use the scanned room's actual height
+        when running inference on a real layout; defaults to 3.0 m for
+        training with randomly generated rooms.
     rack_type : str
         Rack model key used for all placed racks (default "42U").
     power_kw : float
@@ -99,19 +111,22 @@ class ThermalBridge:
     def __init__(
         self,
         grid_size: int = 50,
+        ceiling_m: float = _DEFAULT_CEILING_M,
         rack_type: str = "42U",
         power_kw: float = DEFAULT_RACK_POWER_KW,
         airflow_cfm: float = DEFAULT_RACK_AIRFLOW_CFM,
     ) -> None:
         self.grid_size = grid_size
+        self._ceiling_m = ceiling_m
         self.rack_type = rack_type
         self.power_kw = power_kw
         self.airflow_cfm = airflow_cfm
 
-        # Pre-compute voxel grid shape: (X, Y, Z)
-        self._nx = grid_size * _CELL_V        # 50 * 4 = 200
-        self._ny = grid_size * _CELL_V        # 200
-        self._nz = CEILING_V                  # 30
+        # Voxel grid shape: X and Y from RL grid size, Z from actual ceiling height.
+        # With CELL_M=0.2 m and _CELL_V=2: 50 cells × 2 voxels = 100 voxels per axis.
+        self._nx = grid_size * _CELL_V
+        self._ny = grid_size * _CELL_V
+        self._nz = max(1, int(round(ceiling_m / VOXEL_SIZE)))
         self._origin = np.zeros(3, dtype=np.float64)
 
     # ------------------------------------------------------------------
@@ -124,7 +139,7 @@ class ThermalBridge:
         rack_dir: np.ndarray,
         obstacle: np.ndarray,
         cooling_pos: np.ndarray,
-    ) -> MetricsResult | None:
+    ) -> tuple[MetricsResult | None, np.ndarray, float]:
         """Run the 3-D thermal engine and return ASHRAE metrics.
 
         Returns ``None`` if no racks have been placed yet.
@@ -149,9 +164,27 @@ class ThermalBridge:
         semantic_grid = self._build_semantic_grid(obstacle, racks, cooling_pos)
 
         temp_3d = compute_thermal_field(
-            semantic_grid, racks, self._origin, cooling_units,
+            semantic_grid,
+            racks,
+            self._origin,
+            cooling_units,
         )
-        return compute_metrics(semantic_grid, temp_3d, racks, self._origin)
+
+        air_mask = np.isin(
+            semantic_grid, [SPACE_EMPTY, RACK_INTAKE, RACK_EXHAUST, COOLING_AC_VENT]
+        )
+        masked_temp = np.where(air_mask, temp_3d, np.nan)
+        temp_2d = np.nanmean(masked_temp, axis=2)
+        temp_2d = np.nan_to_num(temp_2d, -1.0)
+
+        cooling_energy = self.compute_cooling_energy(
+            temp_3d, cooling_units, semantic_grid, self._origin
+        )
+        return (
+            compute_metrics(semantic_grid, temp_3d, racks, self._origin),
+            temp_2d,
+            cooling_energy,
+        )
 
     # ------------------------------------------------------------------
     # Internal builders
@@ -189,9 +222,9 @@ class ThermalBridge:
             wy = (float(gy) + 0.5) * CELL_M
             units.append(
                 CoolingUnit(
-                    position=Coordinate(x=wx, y=wy, z=CEILING_M),
+                    position=Coordinate(x=wx, y=wy, z=self._ceiling_m),
                     capacity_kw=DEFAULT_AC_CAPACITY_KW,
-                    supply_direction=(0.0, 0.0, -1.0),   # blowing downward
+                    supply_direction=(0.0, 0.0, -1.0),  # blowing downward
                     supply_temp_c=DEFAULT_AC_SUPPLY_TEMP_C,
                     airflow_cfm=DEFAULT_AC_AIRFLOW_CFM,
                 )
@@ -218,7 +251,9 @@ class ThermalBridge:
         closed boundary (avoids airflow escaping at grid edges).
         """
         grid = np.full(
-            (self._nx, self._ny, self._nz), SPACE_EMPTY, dtype=np.int8,
+            (self._nx, self._ny, self._nz),
+            SPACE_EMPTY,
+            dtype=np.int8,
         )
 
         # ── Perimeter walls ───────────────────────────────────────────
@@ -250,9 +285,9 @@ class ThermalBridge:
         # ── Rack voxels ───────────────────────────────────────────────
         dims = RACK_DIMENSIONS.get(self.rack_type, RACK_DIMENSIONS["42U"])
         rack_w, rack_d, rack_h = dims
-        vw = max(1, int(round(rack_w / VOXEL_SIZE)))   # voxels wide
-        vd = max(1, int(round(rack_d / VOXEL_SIZE)))   # voxels deep
-        vh = max(1, int(round(rack_h / VOXEL_SIZE)))   # voxels tall
+        vw = max(1, int(round(rack_w / VOXEL_SIZE)))  # voxels wide
+        vd = max(1, int(round(rack_d / VOXEL_SIZE)))  # voxels deep
+        vh = max(1, int(round(rack_h / VOXEL_SIZE)))  # voxels tall
         half_w = vw // 2
 
         for rack in racks:
@@ -289,12 +324,61 @@ class ThermalBridge:
             # Body
             grid[x0c:x1c, y0c:y1c, z0c:z1c] = RACK_BODY
 
-            # Intake face (first voxel along the depth axis, at position side)
+            # Intake/exhaust faces depend on the exhaust direction (sign).
+            # sign > 0: exhaust blows toward max-axis → intake at min face, exhaust at max face
+            # sign < 0: exhaust blows toward min-axis → exhaust at min face, intake at max face
+            # (This matches solver._facing_to_axis_dir and the "intake at position" convention.)
             if axis == 0:
-                grid[x0c:x0c + 1, y0c:y1c, z0c:z1c] = RACK_INTAKE
-                grid[x1c - 1:x1c, y0c:y1c, z0c:z1c] = RACK_EXHAUST
+                low_face = RACK_EXHAUST if sign < 0 else RACK_INTAKE
+                high_face = RACK_INTAKE if sign < 0 else RACK_EXHAUST
+                grid[x0c : x0c + 1, y0c:y1c, z0c:z1c] = low_face
+                grid[x1c - 1 : x1c, y0c:y1c, z0c:z1c] = high_face
             else:
-                grid[x0c:x1c, y0c:y0c + 1, z0c:z1c] = RACK_INTAKE
-                grid[x0c:x1c, y1c - 1:y1c, z0c:z1c] = RACK_EXHAUST
+                low_face = RACK_EXHAUST if sign < 0 else RACK_INTAKE
+                high_face = RACK_INTAKE if sign < 0 else RACK_EXHAUST
+                grid[x0c:x1c, y0c : y0c + 1, z0c:z1c] = low_face
+                grid[x0c:x1c, y1c - 1 : y1c, z0c:z1c] = high_face
 
         return grid
+
+    def compute_cooling_energy(
+        self,
+        temp_3d: np.ndarray,
+        cooling_units: list[CoolingUnit],
+        grid: np.ndarray,
+        origin: np.ndarray,
+    ) -> float:
+        """
+        각 냉각 유닛의 물리적 냉각 부하(kW)를 계산합니다.
+        """
+        total_cooling_load_kw = 0.0
+
+        for unit in cooling_units:
+            # 1. T_supply: 설정된 공급 온도 (기존 객체 속성 활용)
+            t_supply = unit.supply_temp_c
+
+            # 2. T_return: 쿨링 유닛 주변(흡입구) 온도를 샘플링
+            # 유닛 위치의 복셀 좌표 변환
+            ux, uy, uz = _world_to_index_solver(
+                unit.position.x, unit.position.y, unit.position.z, origin
+            )
+
+            # 유닛 주변 3x3x3 영역의 온도 평균을 구함 (리턴 온도 추정)
+            # 단, 공기 영역(air_mask)만 고려하여 샘플링
+            roi = temp_3d[
+                max(0, ux - 1) : min(grid.shape[0], ux + 2),
+                max(0, uy - 1) : min(grid.shape[1], uy + 2),
+                max(0, uz - 1) : min(grid.shape[2], uz + 2),
+            ]
+            t_return = np.mean(roi)
+
+            # 3. Q = V_dot * rho * Cp * deltaT
+            volume_m3s = unit.airflow_cfm * CFM_TO_M3_S
+            m_dot = volume_m3s * AIR_DENSITY_KG_M3
+
+            delta_t = max(0, t_return - t_supply)
+            load_kw = (m_dot * AIR_CP_J_KG_K * delta_t) / 1000.0  # W -> kW
+
+            total_cooling_load_kw += load_kw
+
+        return total_cooling_load_kw

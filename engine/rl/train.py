@@ -2,14 +2,18 @@ from stable_baselines3 import PPO
 from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
 from stable_baselines3.common.vec_env import VecNormalize, VecMonitor
 from stable_baselines3.common.monitor import Monitor
-from datacenter import DataCenterEnv
+from engine.rl.datacenter import DataCenterEnv
 import wandb
 from wandb.integration.sb3 import WandbCallback
 from stable_baselines3.common.callbacks import CheckpointCallback
 from stable_baselines3.common.callbacks import BaseCallback
 from sb3_contrib import MaskablePPO
+from sb3_contrib.common.wrappers import ActionMasker
+from engine.rl.policy import SpatialMaskablePolicy
 from datetime import datetime
 import os
+import gymnasium as gym
+import numpy as np
 
 
 class VecNormCheckPointCallback(BaseCallback):
@@ -20,31 +24,35 @@ class VecNormCheckPointCallback(BaseCallback):
 
     def _on_step(self) -> bool:
         if self.n_calls % self.save_freq == 0:
-            step = self.num_timesteps
-
-            vec_path = os.path.join(
-                self.save_path, f"center_{step}_steps_vecnormalize.pkl"
-            )
-
-            self.training_env.save(vec_path)
-
-            if self.verbose:
-                print(f"[VecNorm] Saved: {vec_path}")
-
+            vec_env = self.model.get_vec_normalize_env()
+            if vec_env is not None:
+                vec_path = os.path.join(
+                    self.save_path,
+                    f"center_{self.num_timesteps}_steps_vecnormalize.pkl",
+                )
+                vec_env.save(vec_path)
+                if self.verbose:
+                    print(f"\n[VecNorm] Saved standard VecNormalize to: {vec_path}")
         return True
+
+
+def mask_fn(env: gym.Env) -> np.ndarray:
+    return env.action_masks()
 
 
 def make_env(rank):
     def _init():
-        env = DataCenterEnv(grid_size=50, rack_num=10)
+        env = DataCenterEnv(grid_size=50, rack_num=10, placement_mode="row")
         env.reset(seed=rank)
+        env = ActionMasker(env, mask_fn)
         env = Monitor(env, filename=None)
         return env
 
     return _init
 
 
-if __name__ == "__main__":
+# if __name__ == "__main__":
+def train():
     config = {
         "learning_rate": 5e-5,
         "n_steps": 1024,
@@ -96,12 +104,11 @@ if __name__ == "__main__":
         verbose=1,
     )
 
-    policy_kwargs = dict(
-        normalize_images=False,
-    )
-
+    # Spatial policy: resolution-preserving CNN + fully convolutional action head (engine/rl/policy.py).
+    # It wires the feature extractor, the identity MLP extractor, and normalize_images itself, so it
+    # needs no policy_kwargs.
     model = MaskablePPO(
-        "CnnPolicy",
+        SpatialMaskablePolicy,
         env=env,
         verbose=1,
         tensorboard_log=log_dir,
@@ -115,7 +122,6 @@ if __name__ == "__main__":
         clip_range=config["clip_range"],
         ent_coef=config["ent_coef"],
         target_kl=config["target_kl"],
-        policy_kwargs=policy_kwargs,
     )
 
     model.learn(

@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import "./lib/twinIndicator";
 import { AirflowSystem } from "./components/airflow";
 import { createEquipmentMesh } from "./components/equipment";
 import { buildHeatmap } from "./components/heatmap";
@@ -48,6 +49,18 @@ const items: GalleryItem[] = [
     name: "Ceiling AC (천장형)",
     description: "4-way 카세트형: flange, intake louver, 4방향 vent.",
     equipment: eq("ceiling_ac", [1.0, 0.25, 1.0], "#0097A7"),
+  },
+  {
+    category: "cooling_unit",
+    name: "Stand AC (스탠드형)",
+    description: "스캔된 Century 스탠드 에어컨 (1.5m 폭): 상단 루버 + LCD 패널 + 하단 그릴 + 냉기 glow.",
+    equipment: eq("cooling_unit", [1.5, 2.0, 0.5], "#eae7df"),
+  },
+  {
+    category: "power_cabinet",
+    name: "Power Cabinet (분전반)",
+    description: "스캔된 분전반: 강판 본체 + 인입 도어 + 핸들 + 상단 명판.",
+    equipment: eq("power_cabinet", [0.7, 2.0, 0.4], "#8a978f"),
   },
   {
     category: "network_switch",

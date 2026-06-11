@@ -1,7 +1,7 @@
 from sb3_contrib import MaskablePPO
 import matplotlib.pyplot as plt
 import numpy as np
-from datacenter import DataCenterEnv
+from engine.rl.datacenter import DataCenterEnv
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
 
@@ -36,15 +36,13 @@ def visualize(env, title="Data Center"):
     plt.tight_layout()
     plt.show()
 
+
 def visualize_advanced(env, step, reward=None):
-    import matplotlib.pyplot as plt
-    import numpy as np
 
     heat = env.temp
     rack = env.rack_map
     obstacle = env.obstacle
     cooling = env.cooling_pos
-    flow = env._compute_airflow()
 
     plt.figure(figsize=(7, 7))
 
@@ -60,22 +58,13 @@ def visualize_advanced(env, step, reward=None):
     Y = np.arange(0, env.grid_size, skip)
     XX, YY = np.meshgrid(X, Y)
 
-    U = flow[::skip, ::skip, 1]  # x 방향
-    V = flow[::skip, ::skip, 0]  # y 방향
-
-    # 🔥 magnitude로 색 표현
-    mag = np.sqrt(U**2 + V**2)
-
     plt.quiver(
         XX,
         YY,
-        U,
-        V,
-        mag,                 # 색 = 세기
         cmap="cool",
         scale=25,
         width=0.003,
-        alpha=0.9
+        alpha=0.9,
     )
 
     # =========================
@@ -85,16 +74,10 @@ def visualize_advanced(env, step, reward=None):
     plt.scatter(xs, ys, c="blue", s=50, label="Rack")
 
     # ➡️ rack 방향
-    dirs = [(1,0), (-1,0), (0,1), (0,-1)]
+    dirs = [(1, 0), (-1, 0), (0, 1), (0, -1)]
     for y, x in zip(ys, xs):
         d = dirs[int(env.rack_dir[y, x])]
-        plt.arrow(
-            x, y,
-            d[1]*0.8,
-            d[0]*0.8,
-            color="cyan",
-            head_width=0.5
-        )
+        plt.arrow(x, y, d[1] * 0.8, d[0] * 0.8, color="cyan", head_width=0.5)
 
     # =========================
     # ❄️ cooling
@@ -124,6 +107,7 @@ def visualize_advanced(env, step, reward=None):
     plt.tight_layout()
     plt.show()
 
+
 def make_env():
     def _init():
         env = DataCenterEnv(grid_size=50, rack_num=10)
@@ -132,23 +116,35 @@ def make_env():
     return _init
 
 
-PATH = "./ppo_logs/ppo_dc_20260430_164035/"
+PATH = "./ppo_logs/ppo_dc_20260518_151637/"
+grid = np.zeros((50, 50))
+grid[:40, :] = 1
+grid[:, 10:] = 1
+cooler = np.array([[45, 5], [45, 6], [46, 5], [46, 6]])
+options = {
+    "obstacle": grid,
+    "rack_num": 4,
+    "cooling_pos": cooler,
+}
 
-env = DummyVecEnv([make_env()])
-env = VecNormalize.load(f"{PATH}final_vecnormalize.pkl", env)
-env.training = False
-env.norm_reward = False
 
-model = MaskablePPO.load(f"{PATH}final_model", env=env)
-obs = env.reset()
-done = False
-step = 0
-while not done and step < 100:
-    action_masks = env.envs[0].action_masks()
-    print("Action mask sum:", action_masks.sum())
-    action, _ = model.predict(obs, deterministic=True, action_masks=action_masks)
-    obs, reward, done, _ = env.step(action)
-    done = done[0]
-    step += 1
-    if step == 9:
-        visualize_advanced(env.envs[0], step)
+def test():
+    env = DummyVecEnv([make_env()])
+    env = VecNormalize.load(f"{PATH}center_3000000_steps_vecnormalize.pkl", env)
+    env.training = False
+    env.norm_reward = False
+
+    model = MaskablePPO.load(f"{PATH}center_3000000_steps", env=env)
+    obs, _ = env.envs[0].reset(options=None)
+    obs = env.normalize_obs(obs)
+    done = False
+    step = 0
+    while not done:
+        action_masks = env.envs[0].action_masks()
+        print("Action mask sum:", action_masks.sum())
+        action, _ = model.predict(obs, deterministic=True, action_masks=action_masks)
+        obs, reward, done, _, _ = env.envs[0].step(action)
+        # done = done[0]
+        step += 1
+        if step == env.envs[0].rack_num:
+            visualize_advanced(env.envs[0], step)

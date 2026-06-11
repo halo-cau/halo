@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>HALO — Room Editor</title>
+<style>
+  /* design system (matches frontend/components.html) */
+  :root {
+    --bg:#FAFAF7; --bg-card:#FDFCF9; --bg-sunken:#F4F2EC; --border:#E8E5DD;
+    --text-1:#2C2C2A; --text-2:#5F5E5A; --text-3:#888780;
+    --info:#378ADD; --success:#1D9E75; --success-bg:#E0F1E8; --success-text:#0F6E56; --danger:#BC4B45;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html,body { height:100%; background:var(--bg); color:var(--text-1); overflow:hidden;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Pretendard",system-ui,sans-serif;
+    font-size:13px; font-weight:400; font-variant-numeric:tabular-nums; }
+  #app { display:grid; grid-template-columns:300px 1fr; height:100%; }
+  #side { background:var(--bg-card); border-right:0.5px solid var(--border); padding:16px; overflow-y:auto; display:flex; flex-direction:column; gap:13px; }
+  .topbar { display:flex; align-items:center; justify-content:space-between; }
+  h1 { font-size:14px; font-weight:500; color:var(--text-1); } h1 span { color:var(--text-2); font-weight:400; margin-left:6px; }
+  .back { color:var(--text-2); text-decoration:none; font-size:12px; padding:5px 10px; border-radius:6px; border:0.5px solid var(--border); background:var(--bg-card); }
+  .back:hover { color:var(--text-1); background:var(--bg-sunken); }
+  .hint { font-size:11px; color:var(--text-3); line-height:1.55; }
+  .hint b { color:var(--text-2); font-weight:500; }
+  .label { font-size:11px; color:var(--text-2); font-weight:500; text-transform:uppercase; letter-spacing:.04em; }
+  #list { display:flex; flex-direction:column; gap:3px; max-height:46vh; overflow-y:auto; }
+  .row { display:flex; align-items:center; gap:8px; padding:8px 10px; border-radius:6px; cursor:pointer; border:0.5px solid transparent; background:var(--bg-card); }
+  .row:hover { background:var(--bg-sunken); }
+  .row.sel { background:var(--bg-sunken); border-color:var(--info); }
+  .row.fixed { opacity:.6; }
+  .sw { width:11px; height:11px; border-radius:3px; flex:none; border:0.5px solid rgba(0,0,0,.08); }
+  .nm { flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:var(--text-1); }
+  .lock { color:var(--text-3); font-size:11px; }
+  .del { color:var(--danger); font-size:14px; padding:0 3px; cursor:pointer; opacity:.65; } .del:hover{ opacity:1; }
+  button { border-radius:6px; padding:9px 12px; font-size:13px; font-weight:500; cursor:pointer; border:0.5px solid var(--border); }
+  button.primary { background:var(--info); color:#fff; border-color:var(--info); }
+  button.primary:hover { filter:brightness(.96); }
+  button.ghost { background:var(--bg-card); color:var(--text-2); }
+  button.ghost:hover { background:var(--bg-sunken); color:var(--text-1); }
+  button:disabled { opacity:.5; cursor:default; }
+  #status { font:11px/1.5 ui-monospace,"SF Mono",Menlo,monospace; color:var(--text-2); background:var(--bg-sunken); border:0.5px solid var(--border); border-radius:6px; padding:8px 10px; min-height:36px; white-space:pre-wrap; }
+  #view { position:relative; overflow:hidden; background:var(--bg-sunken); }
+  #view canvas { display:block; width:100%; height:100%; }
+  #hud { position:absolute; top:12px; left:12px; background:var(--bg-card); border:0.5px solid var(--border); border-radius:6px; padding:6px 11px; font-size:12px; color:var(--text-2); }
+  #ovwarn { position:absolute; top:12px; right:12px; background:var(--danger); color:#fff; border-radius:6px; padding:6px 11px; font-size:12px; max-width:260px; line-height:1.4; box-shadow:0 1px 3px rgba(0,0,0,.12); }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="side">
+    <div class="topbar">
+      <h1>Room Editor <span id="job"></span></h1>
+      <a class="back" href="./scan.html">← Viewer</a>
+    </div>
+    <div class="hint">Click an object to select; drag on the floor to move. On a rack the <b style="color:#2E73E8">blue</b> face is intake, the <b style="color:#E0402F">red</b> face is exhaust. <b>↻ Rotate</b> (or press <b>R</b>) turns the selected rack 90°. Press <b>Delete</b> or ✕ to remove. Locked 🔒 objects are fixed. Then <b>Re-voxelize</b>.</div>
+    <div class="label">Instances</div>
+    <div id="list"></div>
+    <button id="rotate" class="ghost" disabled>↻ Rotate rack 90°</button>
+    <button id="revox" class="primary">Re-voxelize</button>
+    <button id="reset" class="ghost">Reset edits</button>
+    <div id="status">loading…</div>
+  </div>
+  <div id="view"><div id="hud">—</div><div id="ovwarn" style="display:none"></div></div>
+</div>
+
+<script type="module">
+import * as THREE from '/vendor/three.module.js';
+import { OrbitControls } from '/vendor/OrbitControls.js';
+
+const COL = { bg:0xF4F2EC, gridA:0xCFCCC4, gridB:0xE2DFD7, shell:0xB0ADA5,
+  edgeMov:0x5F5E5A, edgeFix:0xB0ADA5, edgeSel:0x378ADD, edgeBad:0xBC4B45,
+  intake:0x2E73E8, exhaust:0xE0402F };
+// Rack facing: cycle +90° per rotate. FACE_ROTZ is the Z-rotation that maps a rack's local +Y face
+// (where the blue intake slab sits) onto the world facing direction; FACE_DIR is that unit direction.
+const FACING_CYCLE = ['PLUS_Y','MINUS_X','MINUS_Y','PLUS_X'];
+const FACE_ROTZ = { PLUS_Y:0, MINUS_X:Math.PI/2, MINUS_Y:Math.PI, PLUS_X:-Math.PI/2 };
+const FACE_DIR = { PLUS_X:[1,0], MINUS_X:[-1,0], PLUS_Y:[0,1], MINUS_Y:[0,-1] };
+
+const qs = new URLSearchParams(location.search);
+const JOB = qs.get('job') || 'pi3_chest32_final';
+document.getElementById('job').textContent = JOB;
+const status = (m) => document.getElementById('status').textContent = m;
+
+// Same-origin backend API (mounted alongside the dashboard).
+const PLACEMENTS_URL = () => `/api/v1/twin/${JOB}/artifact/placements.json?t=${Date.now()}`;
+const RESTAMP_URL = () => `/api/v1/twin/${JOB}/restamp`;
+
+const view = document.getElementById('view');
+const canvas = document.createElement('canvas'); view.appendChild(canvas);
+const renderer = new THREE.WebGLRenderer({ canvas, antialias:true });
+renderer.setPixelRatio(devicePixelRatio);
+if ('outputColorSpace' in renderer) renderer.outputColorSpace = THREE.SRGBColorSpace;
+const scene = new THREE.Scene(); scene.background = new THREE.Color(COL.bg);
+const camera = new THREE.PerspectiveCamera(55, 1, 0.01, 5000); camera.up.set(0,0,1);
+const controls = new OrbitControls(camera, canvas); controls.enableDamping = true; controls.dampingFactor = 0.08;
+scene.add(new THREE.AmbientLight(0xffffff, 0.9));
+const dl = new THREE.DirectionalLight(0xffffff, 0.5); dl.position.set(3,2,6); scene.add(dl);
+
+let manifest = null, boxes = [], selected = null;
+const raycaster = new THREE.Raycaster(), ptr = new THREE.Vector2();
+let dragging = false; const dragPlane = new THREE.Plane(new THREE.Vector3(0,0,1), 0); const hit = new THREE.Vector3();
+
+function resize(){ const w=view.clientWidth, h=view.clientHeight; renderer.setSize(w,h,false); camera.aspect=w/h; camera.updateProjectionMatrix(); }
+addEventListener('resize', resize);
+(function loop(){ requestAnimationFrame(loop); controls.update(); renderer.render(scene, camera); })();
+
+function colorOf(voxId){ const c = manifest.vox_color[String(voxId)] || [0.6,0.6,0.66]; return new THREE.Color(c[0],c[1],c[2]); }
+
+// Thin intake (blue, local +Y) and exhaust (red, local -Y) slabs on a rack body so the facing reads
+// at a glance. They are children of the rack mesh, so the rotate handler orients them for free.
+function addFaceSlabs(m, cw, cd, ch){
+  const T = 0.05;
+  const mk = (col, y) => { const s = new THREE.Mesh(new THREE.BoxGeometry(cw*0.98, T, ch*0.96),
+      new THREE.MeshBasicMaterial({ color: col })); s.position.set(0, y, 0); s.raycast = ()=>{};
+      m.add(s); return s; };
+  m.userData.intakeSlab = mk(COL.intake, cd/2);
+  m.userData.exhaustSlab = mk(COL.exhaust, -cd/2);
+}
+
+// Turn the selected rack 90° (intake→exhaust faces and footprint rotate together). Updates facing +
+// pos so a Re-voxelize stamps the rotated rack — the way to author a deliberately broken layout.
+function rotateSelected(){
+  if(!selected || selected.userData.inst.kind!=='rack') return;
+  const m = selected, inst = m.userData.inst;
+  const idx = FACING_CYCLE.indexOf(inst.facing || 'PLUS_Y');
+  const next = FACING_CYCLE[(idx + 1 + FACING_CYCLE.length) % FACING_CYCLE.length];
+  inst.facing = next; m.rotation.z = FACE_ROTZ[next];
+  const alongX = next==='PLUS_X' || next==='MINUS_X';
+  const {cw,cd,ch} = m.userData;
+  inst.dims = alongX ? [cd,cw,ch] : [cw,cd,ch];                         // world AABB for overlap/drag
+  const dir = FACE_DIR[next];
+  inst.pos = [inst.center[0] + dir[0]*cd/2, inst.center[1] + dir[1]*cd/2, 0]; // front(intake) face
+  updHud(); renderList(); checkOverlaps();
+}
+function updateRotateBtn(){ const b=document.getElementById('rotate');
+  if(b) b.disabled = !(selected && selected.userData.inst.kind==='rack'); }
+
+function buildScene(){
+  const [ex,ey,ez] = manifest.ext;
+  const shell = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(ex,ey,ez)),
+                  new THREE.LineBasicMaterial({ color:COL.shell }));
+  shell.position.set(ex/2, ey/2, ez/2); scene.add(shell);
+  const grid = new THREE.GridHelper(Math.max(ex,ey), Math.round(Math.max(ex,ey)/0.5), COL.gridA, COL.gridB);
+  grid.rotation.x = Math.PI/2; grid.position.set(ex/2, ey/2, 0.001); scene.add(grid);
+
+  for (const inst of manifest.instances){
+    const isRack = inst.kind === 'rack';
+    const facing = inst.facing || 'PLUS_Y';
+    const alongX = facing === 'PLUS_X' || facing === 'MINUS_X';
+    // Canonical box in the rack's own frame (width along local X, depth along local Y); the mesh's
+    // Z-rotation then orients it. Non-racks keep their world-axis dims as-is.
+    const [cw,cd,ch] = (isRack && alongX) ? [inst.dims[1], inst.dims[0], inst.dims[2]] : inst.dims;
+    const m = new THREE.Mesh(new THREE.BoxGeometry(cw,cd,ch),
+              new THREE.MeshLambertMaterial({ color:colorOf(inst.vox_id), transparent:true,
+                opacity: inst.movable ? 0.85 : 0.6 }));
+    m.position.set(inst.center[0], inst.center[1], inst.center[2]);
+    const edge = new THREE.LineSegments(new THREE.EdgesGeometry(m.geometry),
+          new THREE.LineBasicMaterial({ color: inst.movable ? COL.edgeMov : COL.edgeFix }));
+    m.add(edge); m.userData.inst = inst; m.userData.edge = edge;
+    if (isRack){
+      m.rotation.z = FACE_ROTZ[facing] ?? 0;
+      m.userData.cw = cw; m.userData.cd = cd; m.userData.ch = ch;
+      addFaceSlabs(m, cw, cd, ch);   // blue intake at local +Y, red exhaust at local -Y
+    }
+    scene.add(m); boxes.push(m);
+  }
+  const c = new THREE.Vector3(ex/2, ey/2, ez/2); const r = Math.max(ex,ey,ez);
+  camera.position.set(c.x + r*0.7, c.y - r*0.9, c.z + r*0.8); camera.far = r*40; camera.updateProjectionMatrix();
+  controls.target.copy(c); controls.update();
+}
+
+function renderList(){
+  const el = document.getElementById('list'); el.innerHTML = '';
+  for (const m of boxes){
+    const inst = m.userData.inst;
+    const row = document.createElement('div'); row.className = 'row' + (inst.movable?'':' fixed') + (selected===m?' sel':'');
+    const c = manifest.vox_color[String(inst.vox_id)] || [0.6,0.6,0.66];
+    row.innerHTML = `<span class="sw" style="background:rgb(${c.map(x=>Math.round(x*255)).join(',')})"></span>`
+      + `<span class="nm">${inst.name}</span>`
+      + (inst.movable ? `<span class="del" title="remove">✕</span>` : `<span class="lock">🔒</span>`);
+    row.addEventListener('click', (e)=>{ if(e.target.classList.contains('del')){ removeBox(m); } else { select(m); frameSel(m);} });
+    el.appendChild(row);
+  }
+}
+
+function select(m){ if(selected) setHL(selected,false); selected = m; if(m) setHL(m,true); renderList(); updHud(); updateRotateBtn(); }
+function edgeColor(m){ return m===selected ? COL.edgeSel : (m.userData.overlap ? COL.edgeBad
+  : (m.userData.inst.movable ? COL.edgeMov : COL.edgeFix)); }
+function setHL(m, on){ m.material.opacity = on ? 0.95 : (m.userData.inst.movable?0.85:0.6);
+  m.userData.edge.material.color.setHex(edgeColor(m)); }
+function refreshEdges(){ for(const m of boxes) m.userData.edge.material.color.setHex(edgeColor(m)); }
+// no two components may occupy the same volume (physically impossible). Touching (faces meet) is OK.
+function checkOverlaps(){
+  for(const m of boxes) m.userData.overlap = false;
+  const EPS = 0.02; let n = 0;                       // ignore sub-voxel slivers; flag real overlap
+  for(let i=0;i<boxes.length;i++) for(let j=i+1;j<boxes.length;j++){
+    const a=boxes[i].userData.inst, b=boxes[j].userData.inst; let ov=Infinity;
+    for(let k=0;k<3;k++) ov=Math.min(ov,
+      Math.min(a.center[k]+a.dims[k]/2, b.center[k]+b.dims[k]/2) - Math.max(a.center[k]-a.dims[k]/2, b.center[k]-b.dims[k]/2));
+    if(ov>EPS){ boxes[i].userData.overlap = boxes[j].userData.overlap = true; n++; }
+  }
+  refreshEdges();
+  const w=document.getElementById('ovwarn'); w.style.display = n?'block':'none';
+  w.textContent = n ? `⚠ ${n} overlap${n>1?'s':''} — physically impossible. Separate the red boxes.` : '';
+  return n;
+}
+function frameSel(m){ controls.target.copy(m.position); controls.update(); }
+function removeBox(m){ if(selected===m) selected=null; scene.remove(m); boxes = boxes.filter(b=>b!==m); renderList(); updHud(); checkOverlaps(); }
+function updHud(){ const h=document.getElementById('hud'); if(!selected){ h.textContent = `${boxes.length} objects`; return; }
+  const i=selected.userData.inst; h.textContent = `${i.name}  ·  (${i.center[0].toFixed(2)}, ${i.center[1].toFixed(2)}) m  ·  ${i.movable?'drag to move':'locked'}`; }
+
+function setPtr(e){ const r=canvas.getBoundingClientRect(); ptr.x=((e.clientX-r.left)/r.width)*2-1; ptr.y=-((e.clientY-r.top)/r.height)*2+1; raycaster.setFromCamera(ptr,camera); }
+canvas.addEventListener('pointerdown', (e)=>{ setPtr(e);
+  const hits = raycaster.intersectObjects(boxes, false);
+  if(hits.length){ const m=hits[0].object; select(m);
+    if(m.userData.inst.movable){ dragging=true; controls.enabled=false; } }
+  else { select(null); }
+});
+canvas.addEventListener('pointermove', (e)=>{ if(!dragging||!selected) return; setPtr(e);
+  if(raycaster.ray.intersectPlane(dragPlane, hit)){
+    const inst = selected.userData.inst;
+    const dx = hit.x - inst.center[0], dy = hit.y - inst.center[1];
+    inst.center[0]=hit.x; inst.center[1]=hit.y;
+    if(inst.kind==='rack'){ inst.pos[0]+=dx; inst.pos[1]+=dy; }
+    selected.position.x = hit.x; selected.position.y = hit.y; updHud(); checkOverlaps();
+  }
+});
+addEventListener('pointerup', ()=>{ if(dragging){ dragging=false; controls.enabled=true; } });
+addEventListener('keydown', (e)=>{ if((e.key==='Delete'||e.key==='Backspace') && selected && selected.userData.inst.movable) removeBox(selected);
+  else if((e.key==='r'||e.key==='R') && selected && selected.userData.inst.kind==='rack') rotateSelected(); });
+document.getElementById('rotate').addEventListener('click', rotateSelected);
+
+document.getElementById('revox').addEventListener('click', async ()=>{
+  const nov = checkOverlaps();
+  if(nov && !confirm(`${nov} component${nov>1?'s':''} overlap (physically impossible). Re-voxelize anyway?`)) return;
+  const btn=document.getElementById('revox'); btn.disabled=true; status('re-voxelizing…');
+  const instances = boxes.map(b=>b.userData.inst);
+  try{
+    const r = await (await fetch(RESTAMP_URL(), {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({instances})})).json();
+    status(`done · ${r.n_instances} instances\n${r.log||''}\nReturn to the Viewer and open the Voxel tab to see the result.`);
+  }catch(err){ status('restamp failed: '+err); }
+  btn.disabled=false;
+});
+document.getElementById('reset').addEventListener('click', ()=> location.reload());
+
+(async function init(){
+  resize();
+  try{ manifest = await (await fetch(PLACEMENTS_URL())).json(); }
+  catch(err){ status('no placements.json for job '+JOB); return; }
+  buildScene(); renderList(); updHud(); checkOverlaps();
+  status(`${manifest.instances.length} instances · room ${manifest.ext.map(x=>x.toFixed(1)).join(' × ')} m`);
+})();
+</script>
+</body>
+</html>

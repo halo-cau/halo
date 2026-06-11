@@ -16,7 +16,7 @@ from engine.core.data_types import Coordinate, CoolingUnit, ScanMetadata
 from engine.core.exceptions import MeshProcessingError, RoomTooLargeError
 from engine.vision.cleaner import clean_and_align_meshes
 from engine.vision.pipeline import run_pipeline
-from engine.core.config import GRID_SHAPE
+from engine.core.config import GRID_SHAPE, MAX_ROOM_DIMENSIONS
 
 
 def _write_mesh(mesh: o3d.geometry.TriangleMesh) -> str:
@@ -94,11 +94,12 @@ class TestTallNarrowRoom:
 #    The floor and ceiling are almost the same plane.
 # ──────────────────────────────────────────────────────────────
 class TestVeryFlatRoom:
-    """10×10 m floor × 0.3 m height — pancake room."""
+    """Near-max floor × 0.3 m height — pancake room (footprint tracks MAX_ROOM_DIMENSIONS)."""
 
     @pytest.fixture()
     def obj_path(self):
-        mesh = _subdivided_box(10.0, 10.0, 0.3)
+        mx, my, _ = MAX_ROOM_DIMENSIONS
+        mesh = _subdivided_box(mx - 0.5, my - 0.5, 0.3)
         path = _write_mesh(mesh)
         yield path
         if os.path.exists(path):
@@ -309,8 +310,10 @@ class TestMaxSizeRoom:
 
     @pytest.fixture()
     def obj_path(self):
-        # Use 3 subdivisions — 2 is too sparse for SOR on large meshes
-        mesh = _subdivided_box(19.5, 19.5, 5.5, iters=3)
+        # Use 3 subdivisions — 2 is too sparse for SOR on large meshes.
+        # Track MAX_ROOM_DIMENSIONS so this stays "just within the limit" if the grid changes.
+        mx, my, mz = MAX_ROOM_DIMENSIONS
+        mesh = _subdivided_box(mx - 0.5, my - 0.5, mz - 0.5, iters=3)
         path = _write_mesh(mesh)
         yield path
         if os.path.exists(path):

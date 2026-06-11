@@ -1,5 +1,68 @@
 import * as THREE from "three";
-import type { SceneGraph } from "../data/sceneGraphs";
+import type { MidTemp, SceneGraph } from "../data/sceneGraphs";
+
+// Fixed absolute colour scale (°C) so the scanned and optimised panels are directly comparable: AC supply
+// temperature at the cold end, hot-aisle ceiling at the warm end.
+const TMIN_C = 14;
+const TMAX_C = 34;
+
+// CFD-standard Jet colormap (MATLAB Jet): dark blue → blue → cyan → yellow → red → dark red.
+function jetColor(t01: number): THREE.Color {
+  const t = Math.min(1, Math.max(0, t01));
+  const stops = [
+    [0.0, 0.0, 0.5],
+    [0.0, 0.0, 1.0],
+    [0.0, 1.0, 1.0],
+    [1.0, 1.0, 0.0],
+    [1.0, 0.0, 0.0],
+    [0.5, 0.0, 0.0],
+  ];
+  const positions = [0.0, 0.125, 0.375, 0.625, 0.875, 1.0];
+  let lo = 0;
+  for (let i = 1; i < positions.length; i++) {
+    if (t <= positions[i]) {
+      lo = i - 1;
+      break;
+    }
+    lo = i;
+  }
+  const hi = Math.min(lo + 1, positions.length - 1);
+  const span = positions[hi] - positions[lo] || 1;
+  const tt = (t - positions[lo]) / span;
+  const color = new THREE.Color();
+  color.setRGB(
+    stops[lo][0] + (stops[hi][0] - stops[lo][0]) * tt,
+    stops[lo][1] + (stops[hi][1] - stops[lo][1]) * tt,
+    stops[lo][2] + (stops[hi][2] - stops[lo][2]) * tt,
+  );
+  return color;
+}
+
+// Render the floor heatmap from the backend's real mid-height (z ~ 1 m) slice of the solved 3-D field.
+// This is the actual simulated temperature the ASHRAE metrics use — cold aisle, hot aisles, AC jet — not a
+// frontend plume approximation. values[i][j] is °C at world (x = ox + i*res, y = oy + j*res); twin Y maps
+// to scene Z. Static (steady-state), so the time-of-day load slider does not animate it.
+function buildHeatmapFromField(group: THREE.Group, mt: MidTemp): number {
+  const res = mt.res_m;
+  for (let i = 0; i < mt.nx; i++) {
+    for (let j = 0; j < mt.ny; j++) {
+      const tempC = mt.values[i][j];
+      const color = jetColor((tempC - TMIN_C) / (TMAX_C - TMIN_C));
+      const tileGeo = new THREE.PlaneGeometry(res * 0.95, res * 0.95);
+      const tileMat = new THREE.MeshBasicMaterial({
+        color,
+        transparent: true,
+        opacity: 0.6,
+        side: THREE.DoubleSide,
+      });
+      const tile = new THREE.Mesh(tileGeo, tileMat);
+      tile.rotation.x = -Math.PI / 2;
+      tile.position.set(mt.ox + (i + 0.5) * res, 0.01, mt.oy + (j + 0.5) * res);
+      group.add(tile);
+    }
+  }
+  return mt.tmax;
+}
 
 // References:
 //   ASHRAE TC 9.9 — Thermal Guidelines for Data Processing Environments
@@ -18,6 +81,11 @@ const HEATMAP_HEIGHT = 1.0; // m — rack mid-height sample plane
 
 export function buildHeatmap(group: THREE.Group, sceneData: SceneGraph, loadFactor = 1.0): number {
   group.clear();
+  // Prefer the real solver mid-height field when the backend supplied it; fall back to the analytical
+  // plume model only for static scenes that carry no field.
+  if (sceneData.midTemp) {
+    return buildHeatmapFromField(group, sceneData.midTemp);
+  }
   const [rw, , rd] = sceneData.room.dimensions;
   const resolution = 0.5;
 
@@ -121,34 +189,8 @@ export function buildHeatmap(group: THREE.Group, sceneData: SceneGraph, loadFact
       const dt = field[xi * nz + zi];
       const t = Math.min(dt / maxDeltaT, 1);
 
-      // CFD-standard Jet colormap (MATLAB Jet): dark blue → blue → cyan →
-      // green → yellow → red → dark red. Saturated, no white.
-      const color = new THREE.Color();
-      const stops = [
-        [0.0, 0.0, 0.5],
-        [0.0, 0.0, 1.0],
-        [0.0, 1.0, 1.0],
-        [1.0, 1.0, 0.0],
-        [1.0, 0.0, 0.0],
-        [0.5, 0.0, 0.0],
-      ];
-      const positions = [0.0, 0.125, 0.375, 0.625, 0.875, 1.0];
-      let lo = 0;
-      for (let i = 1; i < positions.length; i++) {
-        if (t <= positions[i]) {
-          lo = i - 1;
-          break;
-        }
-        lo = i;
-      }
-      const hi = Math.min(lo + 1, positions.length - 1);
-      const span = positions[hi] - positions[lo] || 1;
-      const t01 = (t - positions[lo]) / span;
-      color.setRGB(
-        stops[lo][0] + (stops[hi][0] - stops[lo][0]) * t01,
-        stops[lo][1] + (stops[hi][1] - stops[lo][1]) * t01,
-        stops[lo][2] + (stops[hi][2] - stops[lo][2]) * t01,
-      );
+      // Saturated Jet colormap (relative ΔT, normalised to the scene max).
+      const color = jetColor(t);
 
       const tileGeo = new THREE.PlaneGeometry(resolution * 0.95, resolution * 0.95);
       // Heatmap tiles use NormalBlending (default) so the saturated Jet hues

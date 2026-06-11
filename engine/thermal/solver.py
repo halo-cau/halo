@@ -41,11 +41,7 @@ from engine.core.config import (
     ASHRAE_RECOMMENDED_INLET,
     CFM_TO_M3_S,
     COOLING_AC_VENT,
-    DEFAULT_AC_AIRFLOW_CFM,
     DEFAULT_AC_CAPACITY_KW,
-    DEFAULT_RACK_POWER_KW,
-    OBSTACLE_WALL,
-    RACK_BODY,
     RACK_DIMENSIONS,
     RACK_EXHAUST,
     RACK_INTAKE,
@@ -57,6 +53,7 @@ from engine.core.data_types import (
     RackFacing,
     RackPlacement,
 )
+from engine.thermal._rack_geometry import rack_bbox as _rack_bbox
 
 # ---------------------------------------------------------------------------
 # Tunable constants
@@ -71,12 +68,13 @@ _EXHAUST_OPEN_FRACTION: float = 0.3                  # ~30% rear-face open perfo
 _PLUME_VOXELS_PER_MPS: float = 6.0                   # plume reach per m/s exhaust velocity
 
 # AC jet geometry
-_AC_BASE_JET_LENGTH: int = 25
+_AC_BASE_JET_LENGTH: int = 25                        # legacy cfm-ratio base (unused)
 _AC_MIN_JET_LENGTH: int = 8
-_AC_MAX_JET_LENGTH: int = 50
+_AC_MAX_JET_LENGTH: int = 70                          # room-scale throw cap (~7 m)
 _AC_JET_CROSS_SIGMA: float = 3.0                     # Gaussian spread ⊥ to jet (voxels)
 _AC_COOLING_RATE: float = 0.20                       # reduced — advection now assists transport
 _AC_OUTLET_AREA_M2: float = 0.5                      # effective AC outlet cross-section
+_AC_THROW_M_PER_MPS: float = 2.9                     # throw reach (m) per m/s discharge
 
 # Solver iteration
 _MAX_ITERS: int = 250
@@ -98,6 +96,7 @@ def compute_thermal_field(
     racks: list[RackPlacement],
     origin: np.ndarray,
     cooling_units: list[CoolingUnit] | None = None,
+    ambient_c: float | None = None,
 ) -> np.ndarray:
     """Compute a steady-state temperature field for the room.
 
@@ -111,13 +110,19 @@ def compute_thermal_field(
         World-space offset of voxel index [0, 0, 0].
     cooling_units : list[CoolingUnit] | None
         Cooling units with capacity and supply direction.
+    ambient_c : float | None
+        Room default / outside air temperature in °C used to seed the field, pin solid voxels, and set the
+        exhaust-plume and buoyancy baselines. ``None`` keeps the design default (``_AMBIENT``, 22 °C). The
+        temporal analysis sets this to the OUTSIDE temperature at each discrete time t so the steady-state
+        solve reflects the building envelope's heat load at that hour.
 
     Returns
     -------
     np.ndarray (float32, same shape as *grid*)
         Temperature in °C at every voxel.
     """
-    temp = np.full(grid.shape, _AMBIENT, dtype=np.float32)
+    ambient = _AMBIENT if ambient_c is None else float(ambient_c)
+    temp = np.full(grid.shape, ambient, dtype=np.float32)
 
     # Pre-compute masks
     air_mask = np.isin(grid, [SPACE_EMPTY, RACK_INTAKE, RACK_EXHAUST, COOLING_AC_VENT])
@@ -143,10 +148,11 @@ def compute_thermal_field(
         units_with_influence.append((unit, infl))
 
     # --- Static exhaust heat-source field ---
-    exhaust_source = _build_exhaust_source(grid, racks, origin)
+    exhaust_source = _build_exhaust_source(grid, racks, origin, ambient)
 
-    # Physical temperature floor: cannot go below the coldest source
-    temp_floor = min((u.supply_temp_c for u in units), default=_AMBIENT)
+    # Physical temperature floor: cannot go below the coldest source, which is the colder of the AC supply
+    # and the outside air (on a cold night the room can settle below the AC set point).
+    temp_floor = min([ambient, *(u.supply_temp_c for u in units)])
 
     # --- Iterative solver ---
     for _ in range(_MAX_ITERS):
@@ -161,14 +167,14 @@ def compute_thermal_field(
         #       proportionally to the local ΔT. Self-limiting.
         #    b) Persistent plume: excess above ambient drives continuous
         #       upward transport, modelling buoyant plumes from heat sources.
-        _apply_buoyancy(temp, air_mask)
+        _apply_buoyancy(temp, air_mask, ambient)
 
         # 2. Sub-grid diffusion (turbulent mixing)
         smoothed = uniform_filter(temp, size=3, mode="nearest")
         temp[air_mask] += _DIFFUSION_ALPHA * (smoothed[air_mask] - temp[air_mask])
 
         # 3. Exhaust heat source (constant injection)
-        heat_mask = exhaust_source > _AMBIENT
+        heat_mask = exhaust_source > ambient
         temp[heat_mask] = np.maximum(temp[heat_mask], exhaust_source[heat_mask])
 
         # 4. AC cooling — per-unit supply temperature
@@ -189,7 +195,7 @@ def compute_thermal_field(
         temp[air_mask] = np.maximum(temp[air_mask], temp_floor)
 
         # 6. Pin solid voxels at ambient
-        temp[solid_mask] = _AMBIENT
+        temp[solid_mask] = ambient
 
         # Convergence check
         max_change = np.max(np.abs(temp - prev))
@@ -500,9 +506,18 @@ def _facing_to_axis_dir(facing: RackFacing) -> tuple[int, int]:
 
 
 def _ac_jet_length_for_cfm(cfm: float) -> int:
-    """Derive jet reach (voxels) from the unit's airflow volume."""
-    ratio = cfm / DEFAULT_AC_AIRFLOW_CFM
-    length = int(round(_AC_BASE_JET_LENGTH * ratio))
+    """Derive the supply-jet throw (voxels) from the unit's discharge velocity.
+
+    Discharge velocity is ``v = V̇ / A_outlet``; a faster jet reaches further before
+    entraining to terminal velocity, so the throw scales with ``v``
+    (``_AC_THROW_M_PER_MPS`` metres per m/s). Tying reach to velocity, not a fixed
+    cfm-ratio default, lets a stronger unit cool the full cold aisle instead of every
+    AC stopping at one distance and leaving the far racks uncooled (which biases the
+    layout toward the AC).
+    """
+    vol_m3s = cfm * CFM_TO_M3_S
+    v_discharge = vol_m3s / _AC_OUTLET_AREA_M2 if _AC_OUTLET_AREA_M2 > 1e-9 else 0.0
+    length = int(round(v_discharge * _AC_THROW_M_PER_MPS / VOXEL_SIZE))
     return max(_AC_MIN_JET_LENGTH, min(_AC_MAX_JET_LENGTH, length))
 
 
@@ -593,44 +608,6 @@ def _world_to_index_solver(
     )
 
 
-def _rack_bbox(
-    rack: RackPlacement, origin: np.ndarray, grid_shape: tuple[int, ...],
-) -> tuple[int, int, int, int, int, int]:
-    """Return clamped (x0, x1, y0, y1, z0, z1) for a rack's full volume."""
-    dims = RACK_DIMENSIONS.get(rack.rack_type)
-    if dims is None:
-        return (0, 0, 0, 0, 0, 0)
-    rack_w, rack_d, rack_h = dims
-    vw = max(1, round(rack_w / VOXEL_SIZE))
-    vd = max(1, round(rack_d / VOXEL_SIZE))
-    vh = max(1, round(rack_h / VOXEL_SIZE))
-
-    cx, cy, cz = _world_to_index_solver(
-        rack.position.x, rack.position.y, rack.position.z, origin,
-    )
-    half_w = vw // 2
-    facing = rack.facing
-
-    if facing == RackFacing.PLUS_X:
-        x0, x1 = cx - vd + 1, cx + 1
-        y0, y1 = cy - half_w, cy - half_w + vw
-    elif facing == RackFacing.MINUS_X:
-        x0, x1 = cx, cx + vd
-        y0, y1 = cy - half_w, cy - half_w + vw
-    elif facing == RackFacing.PLUS_Y:
-        x0, x1 = cx - half_w, cx - half_w + vw
-        y0, y1 = cy - vd + 1, cy + 1
-    elif facing == RackFacing.MINUS_Y:
-        x0, x1 = cx - half_w, cx - half_w + vw
-        y0, y1 = cy, cy + vd
-    else:
-        return (0, 0, 0, 0, 0, 0)
-
-    z0, z1 = cz, cz + vh
-    sx, sy, sz = grid_shape
-    return (max(x0, 0), min(x1, sx), max(y0, 0), min(y1, sy), max(z0, 0), min(z1, sz))
-
-
 def _exhaust_delta_t(power_kw: float, airflow_cfm: float) -> float:
     """Physics-based exhaust ΔT: P / (V̇ · ρ · Cₚ)."""
     volume_m3s = airflow_cfm * CFM_TO_M3_S
@@ -658,13 +635,15 @@ def _build_exhaust_source(
     grid: np.ndarray,
     racks: list[RackPlacement],
     origin: np.ndarray,
+    ambient: float = _AMBIENT,
 ) -> np.ndarray:
     """Build a static source-temperature field from all rack exhausts.
 
     Uses first-principles ΔT = P / (V̇ · ρ · Cₚ) and derives plume reach
-    from the exhaust velocity.
+    from the exhaust velocity. ``ambient`` is the baseline the plume decays toward (the outside temperature
+    at time t in the temporal analysis; the design default otherwise).
     """
-    source = np.full(grid.shape, _AMBIENT, dtype=np.float32)
+    source = np.full(grid.shape, ambient, dtype=np.float32)
     sx, sy, sz = grid.shape
     exhaust_mask = grid == RACK_EXHAUST
 
@@ -692,7 +671,7 @@ def _build_exhaust_source(
 
         for step in range(plume_depth):
             decay = np.exp(-0.5 * (step / _PLUME_SIGMA) ** 2)
-            plume_temp = _AMBIENT + delta_t * decay
+            plume_temp = ambient + delta_t * decay
 
             offset = sign * (step + 1)
 
@@ -726,6 +705,7 @@ def _build_exhaust_source(
 def _apply_buoyancy(
     temp: np.ndarray,
     air_mask: np.ndarray,
+    ambient: float = _AMBIENT,
 ) -> None:
     """Two-term buoyancy: direct inter-layer heat exchange.
 
@@ -762,7 +742,7 @@ def _apply_buoyancy(
     temp[:, :, 1:][both]  += xfer_instability[both]
 
     # Term 2: persistent plume — excess above ambient drifts upward
-    excess = np.maximum(temp[:, :, :-1] - _AMBIENT, 0.0)
+    excess = np.maximum(temp[:, :, :-1] - ambient, 0.0)
     xfer_plume = _BUOYANCY_PLUME * excess
 
     temp[:, :, :-1][both] -= xfer_plume[both]

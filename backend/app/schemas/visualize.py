@@ -63,11 +63,28 @@ class EquipmentItem(BaseModel):
     facing: str | None = None  # "+x", "-x", "+y", "-y" for racks
 
 
+class DetectedComponent(BaseModel):
+    """One detected segmentation instance the user can toggle in the UI.
+
+    Coordinates are world-space, matching ``voxel_grid.origin``. Use the
+    ``id`` to address the instance from edit endpoints in the future.
+    """
+    id: int
+    label: str  # canonical segmentor label, e.g. "server rack", "ac_unit"
+    center: list[float]  # [x, y, z] world coords
+    bounds_min: list[float]  # [x, y, z] world coords
+    bounds_max: list[float]  # [x, y, z] world coords
+    n_points: int  # source vertices behind this instance
+
+
 class VisualizeResponse(BaseModel):
     raw_glb: str  # base64-encoded GLB (before cleanup)
     cleaned_glb: str  # base64-encoded GLB (after SOR + floor alignment)
     semantic_glb: str | None = None  # base64-encoded GLB with vertex colors (optional)
     voxel_grid: VoxelData | None = None  # compact voxel grid for 3D rendering
+    layout_voxel_grid: VoxelData | None = None  # shell-only cuboid (walls + air)
     thermal: ThermalData | None = None  # thermal field for heat-map rendering
     metrics: MetricsData | None = None  # ASHRAE compliance metrics
     equipment: list[EquipmentItem] | None = None  # styled equipment for 3D rendering
+    components: list[DetectedComponent] | None = None  # detected segmentation instances
+    backend: str | None = None  # which segmentor produced the labels (or None)

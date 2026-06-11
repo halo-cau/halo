@@ -1,5 +1,11 @@
 // HALO Scene Graph 데이터
 // 서버실(Data Center) 공간 — 3단계 배치 결과: random → rule-based → RL 최적화
+//
+// allScenes (the 시나리오 page) is driven by the server-room twin via ./realScenes
+// (random = as-scanned, optimized = the imitation /optimize proposal — same data the dashboard
+// renders live). The static randomPlacement / ruleBasedPlacement / rlOptimizedPlacement
+// literals below are kept as a fallback and are no longer wired into allScenes.
+import { realOptimizedPlacement, realRandomPlacement } from "./realScenes";
 
 export interface Opening {
   type: "door" | "window" | "vent" | "entrance";
@@ -40,6 +46,21 @@ export interface Score {
   constraint: number; // 제약 조건 충족
 }
 
+// Real mid-height (z ~ 1 m) temperature slice of the solved 3-D field, supplied by the backend so the floor
+// heatmap shows the SAME field the ASHRAE metrics come from. values[i][j] = °C at world
+// (x = ox + i*res_m, y = oy + j*res_m); the scene maps twin Y -> scene Z, so j indexes scene depth.
+export interface MidTemp {
+  z_m: number;
+  res_m: number;
+  nx: number;
+  ny: number;
+  ox: number;
+  oy: number;
+  values: number[][];
+  tmin: number;
+  tmax: number;
+}
+
 export interface SceneGraph {
   id: string;
   name: string;
@@ -51,6 +72,8 @@ export interface SceneGraph {
   };
   furniture: Equipment[];
   score: Score;
+  midTemp?: MidTemp; // real solver mid-height field for the floor heatmap (absent for static scenes)
+  maxIntakeC?: number; // real hottest rack-intake temperature (°C) from the 3-D solve; absent for demo scenes
 }
 
 // 비정형 서버실: 12m x 3.5m x 9m (기존 건물 전환 공간)
@@ -162,7 +185,7 @@ export const randomPlacement: SceneGraph = {
       id: "cooling_01",
       category: "cooling_unit",
       label: "천장형 에어컨 A",
-      position: [1.0, 0, 5.0],
+      position: [2.0, 0, 4.5],
       rotation: [0, 0, 0],
       size: [1.0, 2.2, 0.8],
       color: "#0097A7",
@@ -173,10 +196,21 @@ export const randomPlacement: SceneGraph = {
       id: "cooling_02",
       category: "cooling_unit",
       label: "천장형 에어컨 B",
-      position: [11.0, 0, 6.5],
-      rotation: [0, -60, 0],
+      position: [10.0, 0, 4.5],
+      rotation: [0, 0, 0],
       size: [1.0, 2.2, 0.8],
       color: "#00838F",
+      heatOutput: 0,
+      relations: [],
+    },
+    {
+      id: "cooling_03",
+      category: "cooling_unit",
+      label: "천장형 에어컨 C (보조)",
+      position: [6.0, 0, 4.5],
+      rotation: [0, 0, 0],
+      size: [0.8, 2.0, 0.6],
+      color: "#00ACC1",
       heatOutput: 0,
       relations: [],
     },
@@ -554,7 +588,7 @@ export const trainingHistory = {
   },
 };
 
-export const allScenes: SceneGraph[] = [randomPlacement, rlOptimizedPlacement];
+export const allScenes: SceneGraph[] = [realRandomPlacement, realOptimizedPlacement];
 
 // ===== 시간대별 서버 부하 프로파일 (24시간) =====
 // 각 시간(0~23)에 대한 부하 계수 (0.0 ~ 1.0)

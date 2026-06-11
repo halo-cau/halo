@@ -10,8 +10,13 @@ trimesh>=4.0.0
 rtree>=1.0.1
 networkx>=3.0.0
 scipy>=1.11.0
+laspy>=2.7.0
+lazrs>=0.8.0
 
 # Data Structures & RL
 numpy>=1.26.0
 torch>=2.0.0
 gymnasium>=0.29.0
+# RL policy serving (backend/app/core/rl_service.py loads a MaskablePPO model)
+stable-baselines3>=2.0.0
+sb3-contrib>=2.0.0
