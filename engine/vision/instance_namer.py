@@ -9,7 +9,7 @@ each *whole instance* a server-room semantic label (``floor`` / ``ceiling`` /
     height       — where the instance sits between floor and ceiling,
     position     — its footprint and whether it spans / touches the envelope.
 
-No learned weights, so it runs anywhere (the 8 GB-GPU demo path) and is fully
+No learned weights, so it runs anywhere (including the 8 GB GPU path) and is fully
 deterministic. This is the *naming* stage that complements the instance
 *proposal* stage: the proposer answers "which points form one thing", this
 answers "what is that thing". It is backend-agnostic on purpose — the only

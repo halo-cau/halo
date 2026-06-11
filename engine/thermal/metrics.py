@@ -55,6 +55,7 @@ class RoomMetrics:
     rci_lo: float          # Rack Cooling Index – low end  [0–100 %]
     shi: float             # Supply Heat Index  [0–1]
     rhi: float             # Return Heat Index  [0–1]
+    rti: float             # Return Temperature Index [%] — 100 ideal, >100 recirculation, <100 bypass
     mean_intake: float     # average of all rack intake temps
     mean_exhaust: float    # average of all rack exhaust temps
     mean_return: float     # estimated CRAC return-air temp
@@ -171,6 +172,13 @@ def compute_metrics(
     shi = dq_supply / total if total > 0 else 0.0
     rhi = 1.0 - shi
 
+    # --- RTI (Return Temperature Index) = ΔT_AHU / ΔT_equipment × 100 ---
+    # ΔT_AHU = return − supply (the rise the cooling unit actually sees); ΔT_equipment = exhaust − intake
+    # (the rise the IT load imparts). 100 % is balanced airflow; > 100 % means the return is hotter than the
+    # equipment rise (hot-air recirculation toward intakes / the unit); < 100 % means cold-air bypass.
+    dt_equip = mean_exhaust - mean_intake
+    rti = (mean_return - supply_temp) / dt_equip * 100.0 if dt_equip > 0.1 else 100.0
+
     # --- Vertical stratification profile ---
     air_mask_full = np.isin(grid, [SPACE_EMPTY, RACK_INTAKE, RACK_EXHAUST, COOLING_AC_VENT])
     vertical_profile: list[float] = []
@@ -186,6 +194,7 @@ def compute_metrics(
         rci_lo=round(rci_lo, 1),
         shi=round(shi, 4),
         rhi=round(rhi, 4),
+        rti=round(rti, 1),
         mean_intake=round(mean_intake, 2),
         mean_exhaust=round(mean_exhaust, 2),
         mean_return=round(mean_return, 2),

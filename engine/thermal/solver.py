@@ -41,7 +41,6 @@ from engine.core.config import (
     ASHRAE_RECOMMENDED_INLET,
     CFM_TO_M3_S,
     COOLING_AC_VENT,
-    DEFAULT_AC_AIRFLOW_CFM,
     DEFAULT_AC_CAPACITY_KW,
     RACK_DIMENSIONS,
     RACK_EXHAUST,
@@ -69,12 +68,13 @@ _EXHAUST_OPEN_FRACTION: float = 0.3                  # ~30% rear-face open perfo
 _PLUME_VOXELS_PER_MPS: float = 6.0                   # plume reach per m/s exhaust velocity
 
 # AC jet geometry
-_AC_BASE_JET_LENGTH: int = 25
+_AC_BASE_JET_LENGTH: int = 25                        # legacy cfm-ratio base (unused)
 _AC_MIN_JET_LENGTH: int = 8
-_AC_MAX_JET_LENGTH: int = 50
+_AC_MAX_JET_LENGTH: int = 70                          # room-scale throw cap (~7 m)
 _AC_JET_CROSS_SIGMA: float = 3.0                     # Gaussian spread ⊥ to jet (voxels)
 _AC_COOLING_RATE: float = 0.20                       # reduced — advection now assists transport
 _AC_OUTLET_AREA_M2: float = 0.5                      # effective AC outlet cross-section
+_AC_THROW_M_PER_MPS: float = 2.9                     # throw reach (m) per m/s discharge
 
 # Solver iteration
 _MAX_ITERS: int = 250
@@ -506,9 +506,18 @@ def _facing_to_axis_dir(facing: RackFacing) -> tuple[int, int]:
 
 
 def _ac_jet_length_for_cfm(cfm: float) -> int:
-    """Derive jet reach (voxels) from the unit's airflow volume."""
-    ratio = cfm / DEFAULT_AC_AIRFLOW_CFM
-    length = int(round(_AC_BASE_JET_LENGTH * ratio))
+    """Derive the supply-jet throw (voxels) from the unit's discharge velocity.
+
+    Discharge velocity is ``v = V̇ / A_outlet``; a faster jet reaches further before
+    entraining to terminal velocity, so the throw scales with ``v``
+    (``_AC_THROW_M_PER_MPS`` metres per m/s). Tying reach to velocity, not a fixed
+    cfm-ratio default, lets a stronger unit cool the full cold aisle instead of every
+    AC stopping at one distance and leaving the far racks uncooled (which biases the
+    layout toward the AC).
+    """
+    vol_m3s = cfm * CFM_TO_M3_S
+    v_discharge = vol_m3s / _AC_OUTLET_AREA_M2 if _AC_OUTLET_AREA_M2 > 1e-9 else 0.0
+    length = int(round(v_discharge * _AC_THROW_M_PER_MPS / VOXEL_SIZE))
     return max(_AC_MIN_JET_LENGTH, min(_AC_MAX_JET_LENGTH, length))
 
 

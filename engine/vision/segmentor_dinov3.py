@@ -140,7 +140,7 @@ class Dinov3Segmentor(BaseSegmentor):
             protection_config=self.protection_config,
             graph_config=self.graph_cleanup_config,
             remove_movable=False,
-            apply_semantic_priors=False,   # clusters are unnamed — keep verbatim
+            apply_semantic_priors=False,   # clusters are unnamed — keep as-is
             color_fn=_cluster_color_fn,
             extra={
                 "mode": "kmeans",

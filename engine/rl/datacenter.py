@@ -637,7 +637,7 @@ def make_env_from_scan(
 
     The scan's voxel-grid Z dimension encodes the actual room ceiling height.
     Passing it here ensures the 3-D thermal reconstruction at episode end uses
-    the correct height rather than the hardcoded training default.
+    the correct height rather than a default training height.
 
     Parameters
     ----------

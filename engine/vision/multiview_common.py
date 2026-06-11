@@ -175,7 +175,7 @@ def finalize_grounding_result(
 
     When ``apply_semantic_priors`` is False (unsupervised k-means clusters) the
     structural / rack / flatten priors are skipped — the cluster labels are kept
-    verbatim and colored by ``color_fn`` so the viewer shows raw feature groups.
+    as-is and colored by ``color_fn`` so the viewer shows raw feature groups.
 
     ``apply_rack_prior`` (only meaningful when ``apply_semantic_priors`` is True)
     gates the 3D server-rack geometry prior. Leave it on for rack-focused runs;

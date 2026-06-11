@@ -31,11 +31,14 @@ def _meta() -> dict:
         return {}
 
 
-def available_for(run_dir) -> bool:
-    """True when a cloned layout model is loaded and compatible with the room's geometry.
+_DIR_FACE = ("MINUS_X", "PLUS_X", "MINUS_Y", "PLUS_Y")  # env dir -> intake facing
 
-    Compatibility is a voxel-grid shape check against the geometry the model expects (matching on shape
-    rather than a job id, so freshly created rooms of that geometry are covered too)."""
+
+def _model_compatible(run_dir) -> bool:
+    """True when a cloned layout model is loaded and matches the room's voxel-grid geometry.
+
+    Compatibility is a shape check against the geometry the model expects (matching on shape rather than a
+    job id, so freshly created rooms of that geometry are covered too)."""
     if not MODEL_PATH.exists():
         return False
     shape = _meta().get("shape")
@@ -50,6 +53,11 @@ def available_for(run_dir) -> bool:
         return False
 
 
+def available_for(run_dir) -> bool:
+    """True when the cloned layout policy fits this room's geometry."""
+    return _model_compatible(run_dir)
+
+
 def _load():
     global _model
     if _model is None:
@@ -62,12 +70,20 @@ _CELL_M = 0.2  # metres per RL cell (matches twin_bridge.CELL_M)
 
 
 def rollout(run_dir) -> dict:
-    """Run the macro policy on the room and decode the layout it proposes.
+    """Run the cloned policy on the room and return the layout it proposes: ``racks`` as ``[{x, y, dir}]``
+    plus ``fixed`` world-frame equipment (the AC and network rack at the positions the policy chose, with
+    the fixed infrastructure carried through).
+    """
+    return _rollout_model(run_dir)
 
-    Returns ``racks`` as ``[{x, y, dir}]`` (the schema ``/optimize`` already decodes from rl_service) and
-    ``fixed`` -- the AC and network rack as world-frame instances at the positions the POLICY chose, not the
-    room's current positions, so the proposal shows the equipment relocated. Equipment dimensions are taken
-    from the room's own manifest so the rendered boxes match.
+
+def _rollout_model(run_dir) -> dict:
+    """Run the cloned macro policy and decode the layout it proposes.
+
+    ``fixed`` holds the AC and network rack at the positions the POLICY chose (not the room's current ones),
+    plus the fixed infrastructure the policy does NOT place (fire hose, power cabinet, ...) carried through
+    from the manifest so the bird's-eye view keeps showing it. Equipment dimensions come from the room's own
+    manifest so the rendered boxes match.
     """
     from engine.rl.macro_env import MacroPlacementEnv
     from engine.rl.twin_bridge import twin_to_rl_input
@@ -98,7 +114,7 @@ def rollout(run_dir) -> dict:
     ac_dims = _dims(lambda p: str(p.get("name", "")).startswith("ac_unit") or p.get("vox_id") == 3,
                     [0.5, 1.5, 2.0])
     net_dims = _dims(lambda p: p.get("name") == "network rack" or p.get("vox_id") == 8,
-                     [0.6, 0.8, 2.2])
+                     [0.6, 0.9, 2.2])
 
     fixed = []
     for gx, gy in env.cooling_pos.tolist():
@@ -106,7 +122,21 @@ def rollout(run_dir) -> dict:
                       "center": [round(gx * _CELL_M, 3), round(gy * _CELL_M, 3), round(ac_dims[2] / 2, 3)],
                       "dims": ac_dims})
     for gx, gy, _d in env.netrack:
-        fixed.append({"name": "network rack", "kind": "box", "vox_id": 8, "movable": True,
+        # Orient the network rack like the row it caps (its nearest rack) so its intake/exhaust
+        # line up with the adjacent racks instead of rendering flipped.
+        facing = "PLUS_Y"
+        if racks:
+            nr = min(racks, key=lambda r: (r["x"] - gx) ** 2 + (r["y"] - gy) ** 2)
+            facing = _DIR_FACE[nr["dir"] % 4]
+        fixed.append({"name": "network rack", "kind": "box", "vox_id": 8, "movable": True, "facing": facing,
                       "center": [round(gx * _CELL_M, 3), round(gy * _CELL_M, 3), round(net_dims[2] / 2, 3)],
                       "dims": net_dims})
+    # Fixed infrastructure the policy does not place (fire hose, power cabinet, ...) -> carry it
+    # through; the AC and network rack are excluded because the policy positions those.
+    for p in manifest.get("instances", []):
+        nm = str(p.get("name", ""))
+        if (p.get("kind") == "rack" or nm.startswith("ac_unit") or nm == "network rack"
+                or int(p.get("vox_id", -1)) in (3, 8)):
+            continue
+        fixed.append(p)
     return {"racks": racks, "fixed": fixed}

@@ -3,7 +3,7 @@
 Two fronts produce the same intermediate -- a ``labeled.ply`` (per-point colours) plus a
 ``point_labels.npz`` sidecar (per-point instance names) in a run directory:
 
-* PRIMARY (multi-view, used for the demo): N images -> pi3 reconstruction + SAM3 segmentation, run by
+* PRIMARY (multi-view): N images -> pi3 reconstruction + SAM3 segmentation, run by
   ``scripts/recon/pipeline_web.py`` in the ``halo`` env, which writes ``labeled.ply`` + ``point_labels.npz``.
 * SECONDARY (geometry): one ``.obj/.ply/.las/.laz`` scan -> clean & align -> cluster -> the geometry-
   priors namer (:func:`engine.vision.instance_namer.name_instances`) -> the same two files.

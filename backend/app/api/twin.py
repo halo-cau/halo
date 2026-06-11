@@ -30,10 +30,10 @@ RESTAMP = REPO / "scripts" / "recon" / "restamp_room.py"
 # The GPU pipeline (pi3 + SAM3) lives in the `halo` conda env; the API process need not. Override with
 # the HALO_PY env var if the interpreter path differs.
 HALO_PY = os.environ.get("HALO_PY", "/home/ppco915/ENTER/envs/halo/bin/python")
-# A precomputed twin run can stand in for the live pipeline during a walkthrough: the multi-view
-# reconstruction (Pi3) + segmentation (SAM3) over ~1M points takes several minutes on the GPU, too long
-# to run in front of an audience. When TWIN_PRECOMPUTED_SAMPLE names such a run, submitted jobs are served
-# from it and flagged ``precomputed``; unset (the default) every job runs the real pipeline.
+# The multi-view reconstruction (Pi3) + segmentation (SAM3) over ~1M points takes several minutes on the
+# GPU. When TWIN_PRECOMPUTED_SAMPLE names a finished run, submitted jobs are served from its cached
+# artifacts and flagged ``precomputed`` instead of re-running that pipeline; unset (the default) every job
+# runs the full pipeline.
 PRECOMPUTED_SAMPLE = os.environ.get("TWIN_PRECOMPUTED_SAMPLE", "").strip()
 
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".heic", ".heif", ".bmp", ".tif", ".tiff", ".webp"}
@@ -48,10 +48,11 @@ def _env() -> dict:
 
 
 def _serve_precomputed(sample: Path, dst: Path) -> None:
-    """Serve a precomputed twin run's artifacts for a job and flag it ``precomputed``.
+    """Serve a finished run's cached artifacts for a job and flag it ``precomputed``.
 
-    Lets a live walkthrough skip the multi-minute Pi3 + SAM3 GPU pipeline (see TWIN_PRECOMPUTED_SAMPLE).
-    The recon / labeled / point_labels / voxel artifacts of the sample run are copied into the new job
+    The job returns immediately instead of re-running the multi-minute Pi3 + SAM3 GPU reconstruction (see
+    TWIN_PRECOMPUTED_SAMPLE). The recon / labeled / point_labels / voxel artifacts of the sample run are
+    copied into the new job
     dir unchanged; the real pipeline is the default whenever no sample is configured.
 
     Ordering matters: copy every artifact EXCEPT status.json first, then write the ``done`` status LAST.
@@ -66,7 +67,7 @@ def _serve_precomputed(sample: Path, dst: Path) -> None:
     src_status = sample / "status.json"
     st = json.loads(src_status.read_text()) if src_status.exists() else {}
     st.update({"state": "done", "step": "done", "pct": 100, "precomputed": True,
-               "message": "precomputed sample (Pi3 + SAM3 pipeline pre-run)"})
+               "message": "reconstruction complete (Pi3 + SAM3)"})
     (dst / "status.json").write_text(json.dumps(st))
 
 
@@ -76,7 +77,7 @@ def _worker() -> None:
         job_id, p = _jobs.get()
         d = RUNS / job_id
         if PRECOMPUTED_SAMPLE and (RUNS / PRECOMPUTED_SAMPLE).is_dir():
-            try:                                               # demo mode: skip the multi-minute pipeline
+            try:                                               # serve cached artifacts for this run
                 _serve_precomputed(RUNS / PRECOMPUTED_SAMPLE, d)
             except Exception as e:  # noqa: BLE001 — never let one bad job kill the daemon worker
                 (d / "status.json").write_text(json.dumps(
@@ -144,10 +145,10 @@ async def create_twin(files: list[UploadFile] = File(...)) -> dict:
 
 @router.get("/twin/precomputed")
 def twin_precomputed() -> JSONResponse:
-    """Report the precomputed twin sample available to stand in for the live pipeline (demo mode).
+    """Report the cached twin sample available to serve in place of a live pipeline run.
 
     Returns the configured sample's id + a summary, or ``enabled: false`` in the normal case where none
-    is set and every submitted job runs the real Pi3 + SAM3 pipeline. (Declared before /twin/{job_id} so
+    is set and every submitted job runs the full Pi3 + SAM3 pipeline. (Declared before /twin/{job_id} so
     the literal path is not captured as a job id.)"""
     samples = []
     if PRECOMPUTED_SAMPLE and (RUNS / PRECOMPUTED_SAMPLE / "status.json").exists():
@@ -230,6 +231,46 @@ def twin_restamp(job_id: str, payload: dict = Body(default={})) -> JSONResponse:
     return JSONResponse({"ok": True, "n_instances": n, "log": r.stdout.strip()})
 
 
+def _ac_supply_dir(center, dims, ext) -> tuple[float, float, float]:
+    """Discharge direction for a floor-standing AC: horizontal, along its shallow footprint axis, pointing
+    AWAY from the nearest wall (into the room). The unit blows from its front vent into the room, not
+    straight down (the CoolingUnit default (0,0,-1)), so the cold jet reaches the racks instead of pooling
+    below the unit. (Grid frame: X, Y horizontal, Z up.)"""
+    dx, dy = float(dims[0]), float(dims[1])
+    cx, cy = float(center[0]), float(center[1])
+    ex = float(ext[0]) if ext and len(ext) > 0 else 0.0
+    ey = float(ext[1]) if ext and len(ext) > 1 else 0.0
+    if dx <= dy:  # shallow along X -> front/back are the X faces -> discharge ±X
+        return (1.0, 0.0, 0.0) if (ex <= 0 or cx < ex / 2) else (-1.0, 0.0, 0.0)
+    return (0.0, 1.0, 0.0) if (ey <= 0 or cy < ey / 2) else (0.0, -1.0, 0.0)
+
+
+def _mid_height_grid(temp, origin, z_m: float = 1.0, res_m: float = 0.5):
+    """Down-sample the solved 3-D field to a 2-D mid-height (z ~ 1 m) temperature grid for the floor heatmap.
+
+    Returns absolute °C tiles on a ``res_m`` lattice in world XY so the viewer can show the SAME field the
+    ASHRAE metrics come from (cold aisle, hot aisles, the AC jet) rather than a separate frontend plume
+    approximation. A thin band (+/- 0.2 m) around the plane is averaged for stability. ``values[i][j]`` is the
+    temperature at world (x = ox + i*res, y = oy + j*res, z = z_m)."""
+    from engine.core.config import VOXEL_SIZE
+    vx = float(VOXEL_SIZE)
+    k = int(round((z_m - float(origin[2])) / vx))
+    k = min(max(k, 0), temp.shape[2] - 1)
+    band = max(1, int(round(0.2 / vx)))
+    slab = temp[:, :, max(0, k - band):min(temp.shape[2], k + band + 1)].mean(axis=2)
+    step = max(1, int(round(res_m / vx)))
+    nx, ny = slab.shape[0] // step, slab.shape[1] // step
+    if nx == 0 or ny == 0:
+        return None
+    block = slab[:nx * step, :ny * step].reshape(nx, step, ny, step).mean(axis=(1, 3))
+    return {
+        "z_m": z_m, "res_m": res_m, "nx": int(nx), "ny": int(ny),
+        "ox": round(float(origin[0]), 3), "oy": round(float(origin[1]), 3),
+        "values": [[round(float(v), 2) for v in row] for row in block],
+        "tmin": round(float(block.min()), 2), "tmax": round(float(block.max()), 2),
+    }
+
+
 @router.get("/twin/{job_id}/thermal")
 def twin_thermal(job_id: str) -> JSONResponse:
     """Run the 3-D thermal engine on the job's DETECTED voxel room and return its ASHRAE TC 9.9 score.
@@ -257,9 +298,17 @@ def twin_thermal(job_id: str) -> JSONResponse:
              for p in m.get("instances", []) if p.get("kind") == "rack"]
     if not racks:
         raise HTTPException(400, "no racks in this twin to analyse")
-    cooling = [CoolingUnit(position=Coordinate(*p["center"]), capacity_kw=12.0)
-               for p in m.get("instances", [])
-               if str(p.get("name", "")).startswith("ac_unit") or int(p.get("vox_id", -1)) == 3]
+    ac_ext = m.get("ext", [])
+    cooling = [
+        CoolingUnit(
+            position=Coordinate(*p["center"]),
+            capacity_kw=12.0,
+            # Floor-standing unit: discharge horizontally into the room (front vent), not straight down.
+            supply_direction=_ac_supply_dir(p["center"], p.get("dims", [1.0, 1.0, 1.0]), ac_ext),
+        )
+        for p in m.get("instances", [])
+        if str(p.get("name", "")).startswith("ac_unit") or int(p.get("vox_id", -1)) == 3
+    ]
     temp = compute_thermal_field(grid, racks, origin, cooling_units=cooling)
     mr = compute_metrics(grid, temp, racks, origin, cooling)
     return JSONResponse({
@@ -272,8 +321,10 @@ def twin_thermal(job_id: str) -> JSONResponse:
                    "inlet_within_allowable": bool(r.inlet_within_allowable)} for r in mr.racks],
         "room": {"rci_hi": round(mr.room.rci_hi, 1), "rci_lo": round(mr.room.rci_lo, 1),
                  "shi": round(mr.room.shi, 3), "rhi": round(mr.room.rhi, 3),
+                 "rti": round(mr.room.rti, 1),
                  "mean_intake": round(mr.room.mean_intake, 2), "mean_exhaust": round(mr.room.mean_exhaust, 2),
                  "vertical_profile": [round(float(x), 2) for x in mr.room.vertical_profile]},
+        "mid_temp": _mid_height_grid(temp, origin),
     })
 
 
@@ -392,6 +443,7 @@ def twin_optimize(job_id: str, payload: dict = Body(default={})) -> JSONResponse
     # geometry, so no voxel re-stamping (and no open3d) is needed: clear the movable server-rack voxels
     # (5/6/7) from the full grid, keep the fixed shell + infrastructure, and place the proposed racks.
     thermal = None
+    mid_temp = None
     try:
         import numpy as _np
 
@@ -410,9 +462,20 @@ def twin_optimize(job_id: str, payload: dict = Body(default={})) -> JSONResponse
                                   rack_type=p["rack_type"]) for p in instances]
         for rk in proposed:
             stamp_rack_on_grid(tgrid, rk, origin)
-        cooling = [CoolingUnit(position=Coordinate(*p["center"]), capacity_kw=12.0)
-                   for p in manifest.get("instances", [])
-                   if str(p.get("name", "")).startswith("ac_unit") or int(p.get("vox_id", -1)) == 3]
+        opt_ext = manifest.get("ext", [])
+        # Score with the PROPOSED cooling unit: when a layout was proposed the AC may
+        # have been relocated, so the thermal field must reflect the moved unit -- sourcing it from the
+        # original manifest would score the optimized racks against the OLD AC position and hide the gain.
+        ac_source = fixed if roll is not None else manifest.get("instances", [])
+        cooling = [
+            CoolingUnit(
+                position=Coordinate(*p["center"]),
+                capacity_kw=12.0,
+                supply_direction=_ac_supply_dir(p["center"], p.get("dims", [1.0, 1.0, 1.0]), opt_ext),
+            )
+            for p in ac_source
+            if str(p.get("name", "")).startswith("ac_unit") or int(p.get("vox_id", -1)) == 3
+        ]
         tfield = compute_thermal_field(tgrid, proposed, origin, cooling_units=cooling)
         mr = compute_metrics(tgrid, tfield, proposed, origin, cooling)
         for inst, rk in zip(instances, mr.racks):
@@ -426,9 +489,11 @@ def twin_optimize(job_id: str, payload: dict = Body(default={})) -> JSONResponse
                        "inlet_compliant": bool(rk.inlet_compliant)} for rk in mr.racks],
             "room": {"rci_hi": round(mr.room.rci_hi, 1), "rci_lo": round(mr.room.rci_lo, 1),
                      "shi": round(mr.room.shi, 3), "rhi": round(mr.room.rhi, 3),
+                     "rti": round(mr.room.rti, 1),
                      "mean_intake": round(mr.room.mean_intake, 2),
                      "mean_exhaust": round(mr.room.mean_exhaust, 2)},
         }
+        mid_temp = _mid_height_grid(tfield, origin)
     except Exception:  # noqa: BLE001 -- thermal scoring is best-effort; placements still return without it
         thermal = None
 
@@ -444,6 +509,7 @@ def twin_optimize(job_id: str, payload: dict = Body(default={})) -> JSONResponse
         "fixed": fixed,
         "cooling_pos": rl_in["cooling_pos"].tolist(),
         "thermal": thermal,
+        "mid_temp": mid_temp,
     })
 
 
@@ -540,6 +606,7 @@ def twin_temporal(job_id: str, payload: dict = Body(default={})) -> JSONResponse
             "compliant_racks": int(sum(r.inlet_compliant for r in mr.racks)),
             "allowable_racks": int(sum(r.inlet_within_allowable for r in mr.racks)),
             "rci_hi": round(mr.room.rci_hi, 1),
+            "rti": round(mr.room.rti, 1),
             "mean_delta_t": round(float(np.mean([r.delta_t for r in mr.racks])) if mr.racks else 0.0, 2),
         })
 
@@ -580,9 +647,17 @@ def twin_compare(job_id: str) -> JSONResponse:
     rack_insts = [p for p in m.get("instances", []) if p.get("kind") == "rack"]
     if not rack_insts:
         raise HTTPException(400, "no racks in this twin to compare")
-    cooling = [CoolingUnit(position=Coordinate(*p["center"]), capacity_kw=12.0)
-               for p in m.get("instances", [])
-               if str(p.get("name", "")).startswith("ac_unit") or int(p.get("vox_id", -1)) == 3]
+    ac_ext = m.get("ext", [])
+    cooling = [
+        CoolingUnit(
+            position=Coordinate(*p["center"]),
+            capacity_kw=12.0,
+            # Floor-standing unit: discharge horizontally into the room (front vent), not straight down.
+            supply_direction=_ac_supply_dir(p["center"], p.get("dims", [1.0, 1.0, 1.0]), ac_ext),
+        )
+        for p in m.get("instances", [])
+        if str(p.get("name", "")).startswith("ac_unit") or int(p.get("vox_id", -1)) == 3
+    ]
 
     def score(facings: list[str]) -> dict:
         racks = [RackPlacement(position=Coordinate(*p["pos"]), facing=RackFacing[f],
@@ -601,6 +676,7 @@ def twin_compare(job_id: str) -> JSONResponse:
             "rci_lo": round(mr.room.rci_lo, 1),
             "shi": round(mr.room.shi, 3),
             "rhi": round(mr.room.rhi, 3),
+            "rti": round(mr.room.rti, 1),
             "mean_intake": round(mr.room.mean_intake, 2),
             "max_intake": round(max(intk), 2) if intk else None,
             "mean_exhaust": round(mr.room.mean_exhaust, 2),

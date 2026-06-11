@@ -8,11 +8,10 @@ racks, AC units, cable trays) survive into the voxelizer.
 The backends, all returning a per-vertex labelled ``SegmentorResult``:
 
 - ``geometric`` (default): a percentile-cuboid shell + DBSCAN interior
-  clustering pipeline that needs no weights. Robust for the capstone demo
-  while the Mask3D finetune is still being trained.
-- ``mask3d``: the cvg/Mask3D model, finetuned (or hard-overfit) on the
-  capstone room's labeled scans. Single 3D forward pass over the point
-  cloud. Use when the checkpoint is healthy.
+  clustering pipeline that needs no weights. A robust weight-free default.
+- ``mask3d``: the cvg/Mask3D model, finetuned on labeled server-room scans.
+  Single 3D forward pass over the point cloud. Use when a checkpoint is
+  available.
 - ``dino_sam3``: open-vocabulary multi-view pipeline (GroundingDINO + SAM3).
   Renders the aligned mesh, runs 2D detection + segmentation per view, and
   backprojects masks to 3D vertex labels.

@@ -2,9 +2,7 @@
 
 Given one or more demonstrated layouts -- expert placements on a room -- this fits the policy to reproduce
 them. A demonstration decomposes into the macro actions that build it (place the cooling unit, the rack
-rows, the network rack), and the policy is trained by supervised cross-entropy to emit those actions. With
-demonstrations spanning many rooms this is standard imitation learning; with a single demonstration it is a
-fast supervised warm start for the reinforcement-learning policy.
+rows, the network rack), and the policy is trained by supervised cross-entropy to emit those actions.
 
 Pipeline:
   1. Load a demonstration run (``voxel_grid.npy`` + ``placements.json``); derive the room (obstacle +
@@ -37,14 +35,17 @@ def _cell(x_m: float, y_m: float) -> tuple[int, int]:
     return int(round(x_m / CELL_M)), int(round(y_m / CELL_M))
 
 
-def build_demonstration(run_dir: Path):
+def build_demonstration(run_dir: Path, placements_name: str = "placements.json"):
     """Return (obstacle, ceiling_m, actions, expected, racks_per_row) for a demonstration run.
 
     ``actions`` is the ordered list of macro action indices that build the demonstrated layout; ``expected``
-    records the entities for verification.
+    records the entities for verification. ``placements_name`` selects which placements file in the run is
+    the demonstrated layout (default the scanned ``placements.json``; pass an alternative layout file to use
+    as the demonstration). The empty-room obstacle always comes from ``voxel_grid.npy``, so the demonstrated
+    layout and the room geometry can be sourced separately.
     """
     grid = np.load(run_dir / "voxel_grid.npy")
-    manifest = json.loads((run_dir / "placements.json").read_text())
+    manifest = json.loads((run_dir / placements_name).read_text())
 
     empty = grid.copy()
     empty[np.isin(empty, _MOVABLE)] = 0
@@ -159,13 +160,15 @@ def verify(model, obstacle, ceiling_m, actions, expected, racks_per_row, opts):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--run", required=True, help="demonstration twin run dir")
+    ap.add_argument("--placements", default="placements.json",
+                    help="placements file under --run to imitate (e.g. optimized_layout.json)")
     ap.add_argument("--epochs", type=int, default=400)
     ap.add_argument("--lr", type=float, default=1e-3)
     ap.add_argument("--out", default=None, help="optional path to save the cloned model.zip")
     args = ap.parse_args()
 
     run_dir = Path(args.run)
-    obstacle, ceiling_m, actions, expected, rpr = build_demonstration(run_dir)
+    obstacle, ceiling_m, actions, expected, rpr = build_demonstration(run_dir, args.placements)
     print(f"demonstration: {len(actions)} macro actions | racks_per_row={rpr} | ceiling={ceiling_m:.2f}m")
     print(f"  AC cell      {expected['ac']}")
     for r in expected["rows"]:

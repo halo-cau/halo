@@ -19,7 +19,7 @@ DESIGN NOTES / DECISIONS:
      ~1 m plane would miss.
   2. ``rack_num`` and the cooling layout are real DESIGN TARGETS (intended): the user may want a different
      number of racks / AC units than the previous scan.  ``rack_num`` defaults to the twin's stamped count
-     but is meant to be set explicitly; ``cooling_pos`` overrides the scanned AC cells verbatim.
+     but is meant to be set explicitly; ``cooling_pos`` overrides the scanned AC cells directly.
   3. The AC is *movable*, so it is stripped from the empty grid; its position is read from the manifest and
      mapped to ``cooling_pos`` as FREE cells (matching how the policy trained, see
      ``DataCenterEnv._generate_cooling``).  Pass ``ac_as_obstacle=True`` to forbid racks on the AC footprint.
@@ -77,7 +77,7 @@ def twin_to_rl_input(empty_grid, manifest, rack_num=None, cooling_pos=None,
     obstacle[:rcx, :rcy] = blocks.any(axis=(1, 3)).astype(np.int8)
 
     # 2. COOLING — a real DESIGN TARGET: the user may want a different number / placement of AC units than
-    #    the scan. If ``cooling_pos`` is given it is used verbatim (the design); otherwise the scanned AC
+    #    the scan. If ``cooling_pos`` is given it is used as supplied (the design); otherwise the scanned AC
     #    instances are mapped to their FREE RL cells, subsampled to <= max_coolers (trained on 2-10).
     if cooling_pos is not None and len(cooling_pos):
         cool = np.asarray(cooling_pos, dtype=int).reshape(-1, 2)
