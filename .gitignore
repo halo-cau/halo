@@ -79,3 +79,4 @@ tools/recon_web/
 # regenerated per scan session (same policy as the already-ignored server_room_phone/).
 data/server_room_*/
 data/sonata_las6/
+.gstack/

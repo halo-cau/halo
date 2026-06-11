@@ -1,5 +1,11 @@
 // HALO Scene Graph 데이터
 // 서버실(Data Center) 공간 — 3단계 배치 결과: random → rule-based → RL 최적화
+//
+// allScenes (the 시나리오 page) is driven by the REAL precomputed twin via ./realScenes
+// (random = as-scanned, optimized = the imitation /optimize proposal — same data the dashboard
+// renders live). The hand-authored randomPlacement / ruleBasedPlacement / rlOptimizedPlacement
+// literals below are kept as a fallback / reference layout and are no longer wired into allScenes.
+import { realOptimizedPlacement, realRandomPlacement } from "./realScenes";
 
 export interface Opening {
   type: "door" | "window" | "vent" | "entrance";
@@ -565,7 +571,7 @@ export const trainingHistory = {
   },
 };
 
-export const allScenes: SceneGraph[] = [randomPlacement, rlOptimizedPlacement];
+export const allScenes: SceneGraph[] = [realRandomPlacement, realOptimizedPlacement];
 
 // ===== 시간대별 서버 부하 프로파일 (24시간) =====
 // 각 시간(0~23)에 대한 부하 계수 (0.0 ~ 1.0)

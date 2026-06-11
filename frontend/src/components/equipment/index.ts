@@ -6,7 +6,9 @@ import { createFallback } from "./fallback";
 import { createMonitoring } from "./monitoring";
 import { createNetworkSwitch } from "./networkSwitch";
 import { createPdu } from "./pdu";
+import { createPowerCabinet } from "./powerCabinet";
 import { createServerRack } from "./serverRack";
+import { createStandAc } from "./standAc";
 import { createUps } from "./ups";
 
 export interface EquipmentContext {
@@ -29,11 +31,18 @@ export function createEquipmentMesh(
       group = createServerRack(item);
       break;
     case "cooling_unit":
+    case "stand_ac":
+      // The scanned room's AC is a floor-standing package unit (Century), not a ceiling cassette.
+      group = createStandAc(item);
+      break;
     case "ceiling_ac":
       group = createCeilingAc(item, ctx.roomHeight);
       break;
     case "network_switch":
       group = createNetworkSwitch(item);
+      break;
+    case "power_cabinet":
+      group = createPowerCabinet(item);
       break;
     case "ups":
       group = createUps(item);

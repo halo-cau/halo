@@ -48,12 +48,19 @@ class SceneViewer {
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0xf4f2ec);
 
+    // Frame the camera to the actual room footprint (from room.dimensions) so the real
+    // scanned room (≈7.5×3.9 m) fills the view instead of the old fixed 12×9 m assumption.
+    const [rw, , rd] = this.sceneData.room.dimensions;
+    const cx = rw / 2;
+    const cz = rd / 2;
+    const span = Math.max(rw, rd);
+
     this.camera = new THREE.PerspectiveCamera(50, 1, 0.1, 200);
-    this.camera.position.set(16, 12, 16);
-    this.camera.lookAt(6, 0, 4.5);
+    this.camera.position.set(cx + span * 1.0, span * 1.0, cz + span * 1.5);
+    this.camera.lookAt(cx, 0, cz);
 
     this.controls = new OrbitControls(this.camera, canvas);
-    this.controls.target.set(6, 0, 4.5);
+    this.controls.target.set(cx, 0, cz);
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.05;
     this.controls.maxPolarAngle = Math.PI / 2.1;
@@ -86,8 +93,9 @@ class SceneViewer {
     this.airflowSystem = new AirflowSystem(this.airflowGroup);
     this.zonesGroup = new THREE.Group();
 
-    const grid = new THREE.GridHelper(18, 36, 0xe8e5dd, 0xf4f2ec);
-    grid.position.set(6, -0.01, 4.5);
+    const gridSpan = Math.ceil(span) + 4;
+    const grid = new THREE.GridHelper(gridSpan, gridSpan * 2, 0xe8e5dd, 0xf4f2ec);
+    grid.position.set(cx, -0.01, cz);
     this.scene.add(grid);
 
     this.scene.add(this.roomGroup);
