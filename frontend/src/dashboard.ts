@@ -77,12 +77,15 @@ function pueFor(
     scene.furniture.filter((f) => f.heatOutput > 0).reduce((s, f) => s + f.heatOutput, 0) *
     PEAK_LOAD;
   let coolKw = coolingEnergyBase[scene.id] ?? 0;
-  if (scene.id === "detected" && m) {
-    // Real PUE from the thermal solve (the static table has no scanned room): cooling electrical
-    // power = IT heat / effective chiller COP, plus a fixed fan/pump overhead. The COP scales with the
-    // Rack Cooling Index (how well intakes sit inside ASHRAE) -- a poorly cooled room makes the chiller
-    // work harder, raising PUE.
-    const cop = 4.0 * Math.max(0.4, m.rciHi);
+  if ((scene.id === "detected" || scene.id === "optimized") && m) {
+    // Cooling electrical power from the ACTUAL thermal solve. The cooling LOAD equals the IT heat (energy
+    // balance), and the chiller's effective coefficient of performance (COP) degrades with recirculation --
+    // the Supply Heat Index (SHI), the share of exhaust heat that leaks back into the intakes. Better
+    // containment lowers SHI, which raises the COP and lowers both cooling power and PUE. SHI is used rather
+    // than the ASHRAE compliance fraction (RCI): RCI saturates at 100 for any compliant layout, so it
+    // cannot distinguish two compliant layouts -- which is why cooling power and PUE did not move with
+    // optimization even though the optimized layout has markedly lower recirculation.
+    const cop = 6.0 * Math.max(0.3, 1 - (m.shi ?? 0));
     coolKw = itKw / cop + 0.08 * itKw;
   }
   const pue = itKw > 0 ? (itKw + coolKw) / itKw : 1.0;
